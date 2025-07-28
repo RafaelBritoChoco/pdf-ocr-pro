@@ -361,7 +361,8 @@ If no changes were needed, write "---NO CHANGES NEEDED---"`;
  * @returns A promise that resolves to the cleaned and custom-formatted document text.
  */
 export async function reformatDocumentText(rawText: string): Promise<string> {
-  console.log(`[INFO] Starting final document reformatting. Text length: ${rawText.length} chars.`);
+  console.log(`🔍 [REFORMAT_DEBUG] Starting final document reformatting. Text length: ${rawText.length} chars.`);
+  console.log(`🔍 [REFORMAT_DEBUG] Raw text preview (first 300 chars):`, rawText.substring(0, 300));
   const startTime = Date.now();
 
   // Define a threshold for what constitutes a large document.
@@ -369,12 +370,16 @@ export async function reformatDocumentText(rawText: string): Promise<string> {
 
   // If the document is large, process it in chunks.
   if (rawText.length > LARGE_DOCUMENT_THRESHOLD) {
+    console.log(`🔍 [REFORMAT_DEBUG] Large document detected (${rawText.length} chars), using chunks`);
     return reformatLargeDocumentInChunks(rawText);
   }
+
+  console.log(`🔍 [REFORMAT_DEBUG] Small document, processing in single request`);
 
   // For smaller documents, process them in a single request with a timeout.
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
+      console.log(`❌ [REFORMAT_DEBUG] Timeout reached after 180 seconds`);
       reject(new Error('reformatDocumentText timed out after 180 seconds.'));
     }, 180000); // 3-minute timeout
   });
@@ -383,7 +388,9 @@ export async function reformatDocumentText(rawText: string): Promise<string> {
     return await Promise.race([
       timeoutPromise,
       withRetry(async () => {
-        console.log('[INFO] Sending single request to Gemini API for final formatting...');
+        console.log('🔍 [REFORMAT_DEBUG] Sending single request to Gemini API for final formatting...');
+        console.log('🔍 [REFORMAT_DEBUG] Using model:', getModel());
+        console.log('🔍 [REFORMAT_DEBUG] Request text length:', rawText.length);
         
         const systemInstruction = `You are an expert document formatter. Your task is to clean and format a raw text document while preserving its original structure and readability.
 
@@ -414,6 +421,8 @@ CRITICAL FORMATTING RULES:
    - Maintain professional document formatting
    - Each article, section, and paragraph should be clearly separated`;
       
+        console.log('🔍 [REFORMAT_DEBUG] Making API call to llmService.generateContent...');
+        
         const response = await llmService.generateContent({ 
           model: getModel(), 
           contents: rawText, 
@@ -424,13 +433,23 @@ CRITICAL FORMATTING RULES:
           } 
         });
         
+        console.log('🔍 [REFORMAT_DEBUG] API response received');
+        console.log('🔍 [REFORMAT_DEBUG] Response type:', typeof response);
+        console.log('🔍 [REFORMAT_DEBUG] Response keys:', Object.keys(response || {}));
+        console.log('🔍 [REFORMAT_DEBUG] Response.text type:', typeof response?.text);
+        console.log('🔍 [REFORMAT_DEBUG] Response.text length:', response?.text?.length || 0);
+        console.log('🔍 [REFORMAT_DEBUG] Response.text preview (first 300 chars):', response?.text?.substring(0, 300) || 'EMPTY');
+        
         const elapsedTime = Date.now() - startTime;
-        console.log(`[SUCCESS] Final formatting completed in ${elapsedTime}ms. Output length: ${response.text?.length || 0}`);
+        console.log(`✅ [REFORMAT_DEBUG] Final formatting completed in ${elapsedTime}ms. Output length: ${response.text?.length || 0}`);
         
         const text = response.text;
         if (!text) {
+          console.log('❌ [REFORMAT_DEBUG] API response.text is empty or null');
           throw new Error("API response for reformatting was empty.");
         }
+        
+        console.log('✅ [REFORMAT_DEBUG] Returning formatted text, length:', text.length);
         return text;
       })
     ]);

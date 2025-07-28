@@ -13,6 +13,7 @@ export interface ProcessingViewProps {
   processingMessage?: string | null;
   reformattingTimer?: number;
   footnoteAnalysis?: { count: number; pages: number[] } | null;
+  currentStatus?: string | null;
 }
 
 const getStatusColor = (status: PageStatus) => {
@@ -39,7 +40,8 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({
   error,
   processingMessage,
   reformattingTimer = 0,
-  footnoteAnalysis
+  footnoteAnalysis,
+  currentStatus
 }) => {
   const [selectedPage, setSelectedPage] = useState<number>(1);
   
@@ -53,6 +55,9 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({
   };
 
   const getProcessingMessage = () => {
+    if (currentStatus) {
+      return currentStatus;
+    }
     if (processingMessage) {
       return processingMessage;
     }

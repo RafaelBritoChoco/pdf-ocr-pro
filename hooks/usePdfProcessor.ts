@@ -35,6 +35,7 @@ interface PdfProcessState {
   isCompleted: boolean;
   processingMessage: string | null;
   reformattingTimer: number;
+  currentStatus: string | null;
 }
 
 const initialProcessState: PdfProcessState = {
@@ -51,6 +52,7 @@ const initialProcessState: PdfProcessState = {
   isCompleted: false,
   processingMessage: null,
   reformattingTimer: 0,
+  currentStatus: null,
 };
 
 const PROCESS_STORAGE_KEY = 'pdfProcessState';
@@ -351,16 +353,66 @@ export const usePdfProcessor = () => {
       // Phase 4 - Final Formatting
       if (!restoredState.stepTimers['phase4']?.endTime && !restoredState.formattedText) {
         stepTimers.startStep('phase4', 'Phase 4: Final formatting');
-        updateState({ isReformatting: true, error: null });
+        updateState({ 
+          isReformatting: true, 
+          error: null, 
+          currentStatus: '🔄 Preparing final document formatting...' 
+        });
         await appendLog(`📝 Phase 4: Formatting final document...`, 'info');
         
         const rawTextToReformat = accumulatedResults.map(r => r.text || '').join('\n\n');
+        
+        // TAREFA 1: DIAGNÓSTICO - Analisar a carga útil (payload)
+        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat length:', rawTextToReformat.length);
+        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat preview (first 500 chars):', rawTextToReformat.substring(0, 500));
+        console.log('🔍 [PHASE4_DEBUG] accumulatedResults count:', accumulatedResults.length);
+        console.log('🔍 [PHASE4_DEBUG] accumulatedResults with text:', accumulatedResults.filter(r => r.text && r.text.length > 0).length);
+        
+        // TAREFA 2: UX FEEDBACK - Estimativa de tempo e status detalhado
+        const estimatedTime = Math.ceil(rawTextToReformat.length / 8000); // ~8000 chars per second
+        updateState({ 
+          currentStatus: `📊 Analyzing ${rawTextToReformat.length} characters (est. ${estimatedTime}s)` 
+        });
+        await appendLog(`📊 Debug: Processando ${rawTextToReformat.length} caracteres de ${accumulatedResults.length} páginas (est. ${estimatedTime}s)`, 'info');
+        
+        if (rawTextToReformat.length < 50) {
+          await appendLog(`⚠️ AVISO: Texto muito curto para reformatação (${rawTextToReformat.length} chars)`, 'warn');
+        }
+        
+        updateState({ 
+          currentStatus: '🤖 Sending to AI for final formatting...' 
+        });
+        await appendLog(`🤖 Enviando para IA para formatação final...`, 'info');
+        
         const finalFormattedText = await reformatDocumentText(rawTextToReformat);
+        
+        // TAREFA 1: DIAGNÓSTICO - Analisar o resultado
+        console.log('🔍 [PHASE4_DEBUG] finalFormattedText length:', finalFormattedText?.length || 0);
+        console.log('🔍 [PHASE4_DEBUG] finalFormattedText preview (first 500 chars):', finalFormattedText?.substring(0, 500) || 'EMPTY');
+        
+        if (!finalFormattedText || finalFormattedText.length === 0) {
+          updateState({ 
+            currentStatus: '❌ Final formatting failed - empty result',
+            error: 'Final formatting returned empty text'
+          });
+          await appendLog(`❌ ERRO: reformatDocumentText retornou texto vazio!`, 'error');
+          throw new Error('Final formatting returned empty text');
+        }
+        
+        updateState({ 
+          currentStatus: '✅ Analyzing formatted document...' 
+        });
+        await appendLog(`✅ Formatação recebida com sucesso (${finalFormattedText.length} chars)`, 'info');
+        
         const footnoteRegex = /<fn>.*?<\/fn>|{{footnote\d+/g;
         const finalAnalysis: FootnoteAnalysisResult = { count: finalFormattedText.match(footnoteRegex)?.length || 0, pages: [] };
         
-        updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
-        await appendLog('🎉 PROCESSING COMPLETE!', 'info');
+        updateState({ 
+          formattedText: finalFormattedText, 
+          footnoteAnalysis: finalAnalysis,
+          currentStatus: '🎉 Document formatting complete!' 
+        });
+        await appendLog(`🎉 PROCESSING COMPLETE! Final text: ${finalFormattedText.length} chars`, 'info');
         stepTimers.stopStep('phase4');
       }
 

@@ -1,8 +1,20 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(process.cwd(), '.env.local') });
+require('dotenv').config(); // Fallback para .env
 const { GoogleGenAI } = require('@google/genai');
+
+// Verificar se a API key está disponível
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+if (!GEMINI_API_KEY) {
+  console.error('🚨 ERRO CRÍTICO: GEMINI_API_KEY não encontrada nas variáveis de ambiente!');
+  console.error('📝 Certifique-se de que .env.local contém: GEMINI_API_KEY=sua_api_key');
+  process.exit(1);
+} else {
+  console.log('✅ API Key carregada com sucesso (length:', GEMINI_API_KEY.length, ')');
+}
 
 const app = express();
 app.use(cors({

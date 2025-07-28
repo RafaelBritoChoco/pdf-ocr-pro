@@ -43,7 +43,8 @@ export default function App() {
     resumeFromLocalStorage,
     continueProcessingFromState,
     processingMessage,
-    reformattingTimer
+    reformattingTimer,
+    currentStatus
   } = usePdfProcessor();
 
   // Auto-resume functionality
@@ -336,6 +337,7 @@ export default function App() {
                processingMessage={processingMessage}
                reformattingTimer={reformattingTimer}
                footnoteAnalysis={footnoteAnalysis}
+               currentStatus={currentStatus}
              />
            </div>
          );

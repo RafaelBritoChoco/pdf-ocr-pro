@@ -1,17 +1,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-// API key deve vir das variáveis de ambiente
-const API_KEY = (process.env.GEMINI_API_KEY as string) || (process.env.API_KEY as string);
+// API key pode vir das variáveis de ambiente (para desenvolvimento) ou será definida em runtime
+const API_KEY = (process.env.GEMINI_API_KEY as string) || (process.env.API_KEY as string) || '';
 
-if (!API_KEY) {
-  console.error('🚨 ERRO: API Key não encontrada! Configure GEMINI_API_KEY no arquivo .env.local');
-  throw new Error('GEMINI_API_KEY é obrigatória. Crie um arquivo .env.local baseado no .env.example');
-}
+// Mutable API key for runtime override
+let currentApiKey = API_KEY;
 
-console.log('🔑 [DEBUG] LLM Client - API Key configurada:', {
-  fromGeminiEnv: !!process.env.GEMINI_API_KEY,
-  fromApiEnv: !!process.env.API_KEY,
-  keyLength: API_KEY.length
+console.log('🔑 [DEBUG] LLM Client - Estado inicial:', {
+  hasEnvKey: !!API_KEY,
+  envKeyLength: API_KEY.length,
+  note: 'API key será configurada via setRuntimeApiKey() se não estiver em env'
 });
 
 export interface LLMService {
@@ -21,9 +19,6 @@ export interface LLMService {
     config?: any;
   }): Promise<{ text: string }>;
 }
-
-// Mutable API key for runtime override
-let currentApiKey = API_KEY;
 
 /** Override the API key used for LLM calls at runtime */
 export function setRuntimeApiKey(key: string) {
