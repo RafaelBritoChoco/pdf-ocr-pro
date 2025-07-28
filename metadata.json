@@ -1,0 +1,6 @@
+{
+  "name": "PDF OCR Pro",
+  "description": "An application to extract text from PDF files with high precision using AI. Users can upload a PDF, see the processing status for each page, view the original page image alongside the extracted text, and download the full text content.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
