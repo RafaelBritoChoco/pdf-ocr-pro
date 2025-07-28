@@ -5,7 +5,7 @@ import { ProcessingView } from './components/ProcessingView';
 import { WorkflowStepper } from './components/WorkflowStepper';
 import { usePdfProcessor } from './hooks/usePdfProcessor';
 import { Button } from './components/ui/Button';
-import { FileText, Download, Sparkles, RefreshCw } from './components/icons';
+import { FileText, Download, Sparkles, RefreshCw, RotateCcw } from './components/icons';
 import { FinalPreview } from './components/FinalPreview';
 import { Card } from './components/ui/Card';
 import { DetailedStatus } from './components/DetailedStatus';
@@ -14,6 +14,7 @@ import { AutoResumeDialog } from './components/AutoResumeDialog';
 import { useAutoResume } from './hooks/useAutoResume';
 import { useDebugLogs } from './hooks/useDebugLogs';
 import { DebugClient } from './services/debugClient';
+import { PageStatus } from './types';
 
 export default function App() {
   // Main view: 'ocr' for PDF processing app, 'api' for LLM API tester
@@ -37,6 +38,7 @@ export default function App() {
     isReformatting,
     footnoteAnalysis,
     formattedText,
+    isCompleted,
     progress, 
     error, 
     clear,
@@ -44,7 +46,8 @@ export default function App() {
     continueProcessingFromState,
     processingMessage,
     reformattingTimer,
-    currentStatus
+    currentStatus,
+    hasSavedState
   } = usePdfProcessor();
 
   // Auto-resume functionality
@@ -66,6 +69,7 @@ export default function App() {
    
    const [currentStep, setCurrentStep] = useState(0);
    const [activeResultTab, setActiveResultTab] = useState('summary');
+   const [savedStateExists, setSavedStateExists] = useState(false);
 
   // Component for API tester
   const ApiPage = () => {
@@ -88,7 +92,7 @@ export default function App() {
       try {
         const parsedConfig = JSON.parse(config || '{}');
         const result = await llmService.generateContent({ model, contents, config: parsedConfig });
-        setResponse(result.text);
+        setResponse(result.response.text || '');
       } catch (err: any) {
         setApiError(err.message || String(err));
       } finally {
@@ -164,6 +168,7 @@ export default function App() {
 
   // Handle auto-resume functionality
   const handleResumeProcess = async () => {
+    console.log('🔄 [AUTO-RESUME] handleResumeProcess iniciado');
     if (autoResumeState.processInfo) {
       try {
         await debugClient.log('info', `🔄 Tentando retomar processo para: ${autoResumeState.processInfo.fileName}`, {
@@ -193,18 +198,34 @@ export default function App() {
         } else {
           await debugClient.log('error', '❌ Não foi possível restaurar estado do localStorage');
         }
-        dismissIncompleteProcess();
       } catch (error) {
         console.error('Erro ao retomar processo:', error);
         await debugClient.log('error', `❌ Erro ao retomar processo: ${error}`);
+      } finally {
+        // Sempre fecha o diálogo, independentemente do resultado
+        console.log('🔄 [AUTO-RESUME] Fechando diálogo via dismissIncompleteProcess...');
         dismissIncompleteProcess();
+        console.log('✅ [AUTO-RESUME] handleResumeProcess finalizado');
       }
+    } else {
+      console.log('⚠️ [AUTO-RESUME] Nenhuma informação de processo encontrada');
     }
   };
 
-  const handleDismissResume = () => {
-    dismissIncompleteProcess();
-  };
+  const handleDismissResume = useCallback(() => {
+    console.log('❌ [AUTO-RESUME] handleDismissResume iniciado');
+    try {
+      const debug = DebugClient.getInstance();
+      debug.log('info', '❌ Utilizador ignorou o processo de retomada', null, 'DismissResume').catch(console.error);
+    } catch (error) {
+      console.error('Erro ao registrar dismiss:', error);
+    } finally {
+      // Sempre fecha o diálogo
+      console.log('🔄 [AUTO-RESUME] Fechando diálogo via dismissIncompleteProcess...');
+      dismissIncompleteProcess();
+      console.log('✅ [AUTO-RESUME] handleDismissResume finalizado');
+    }
+  }, [dismissIncompleteProcess]);
 
   // Mark process as completed when formattedText is available
   useEffect(() => {
@@ -214,23 +235,43 @@ export default function App() {
   }, [formattedText, error, markProcessAsCompleted]);
 
    useEffect(() => {
-     if (formattedText) {
-       setCurrentStep(4); // Final - processo completo
+     // A Lógica de transição de etapas, agora corrigida e robusta.
+     
+     if (formattedText && isCompleted) {
+       // CONDIÇÃO MAIS IMPORTANTE: O processo SÓ está terminado se tivermos o texto final
+       // E a flag de conclusão estiver ativa.
+       setCurrentStep(5); // Etapa Final: Ecrã de Download e Resultados
+
      } else if (isReformatting) {
-       setCurrentStep(3); // Fase 4: Formatação final
+       // Se estiver a reformatar (Fase 4), mostra o ecrã "Finalizing..."
+       setCurrentStep(4);
+
+     } else if (results.some(r => r.status === PageStatus.CORRECTING)) {
+       // Se alguma página estiver a ser corrigida (Fase 3)
+       setCurrentStep(3); 
+
      } else if (isProcessing) {
-       // Durante o processamento, vamos determinar a subfase baseado no progresso
-       if (progress.processed === progress.total && progress.total > 0) {
-         setCurrentStep(2); // Fase 2: Análise IA (após extração completa)
-       } else {
-         setCurrentStep(2); // Fase 1-3: Processamento geral
-       }
+       // Se estiver em qualquer outro estado de processamento (Fases 1-2)
+       setCurrentStep(2);
+
      } else if (file) {
-       setCurrentStep(1); // Arquivo selecionado
+       // Se um ficheiro foi selecionado, mas o processamento não começou
+       setCurrentStep(1);
+
      } else {
-       setCurrentStep(0); // Estado inicial
+       // Estado inicial, nenhum ficheiro
+       setCurrentStep(0);
      }
-   }, [isProcessing, isReformatting, formattedText, file, progress]);
+   }, [isProcessing, isReformatting, formattedText, isCompleted, file, results]); // Array de dependências completo
+
+   // Check if there's a saved state for the selected file
+   useEffect(() => {
+     if (file && hasSavedState) {
+       setSavedStateExists(hasSavedState(file));
+     } else {
+       setSavedStateExists(false);
+     }
+   }, [file, hasSavedState]);
 
    const handleFileSelect = useCallback((selectedFile: File) => {
      setFile(selectedFile);
@@ -254,7 +295,7 @@ export default function App() {
          apiKeyConfigured: !!pdfApiKey
        }, 'ProcessingStart').catch(console.error);
        
-       processPdf(file);
+       processPdf(file, false); // Normal processing without forcing reprocess
      }
    }, [file, processPdf, pdfApiKey]);
    
@@ -263,6 +304,33 @@ export default function App() {
      clear();
      setActiveResultTab('summary');
    },[clear]);
+
+   const handleReprocess = useCallback(() => {
+     if (file) {
+       // Log the reprocess action
+       const debug = DebugClient.getInstance();
+       debug.log('info', `🔄 Reprocessando do zero: ${file.name}`, {
+         fileSize: file.size,
+         apiKeyConfigured: !!pdfApiKey
+       }, 'ReprocessStart').catch(console.error);
+       
+       // Use the forceReprocess parameter to force a clean start
+       processPdf(file, true);
+     }
+   }, [file, processPdf, pdfApiKey]);
+
+   const handleContinueProcess = useCallback(() => {
+     if (file) {
+       // Log the continue action
+       const debug = DebugClient.getInstance();
+       debug.log('info', `🔄 Continuando processo existente: ${file.name}`, {
+         fileSize: file.size,
+         apiKeyConfigured: !!pdfApiKey
+       }, 'ContinueProcess').catch(console.error);
+       
+       processPdf(file, false); // Continue with existing state
+     }
+   }, [file, processPdf, pdfApiKey]);
 
    const handleDownload = useCallback(() => {
      if (!formattedText) return;
@@ -299,10 +367,23 @@ export default function App() {
              
              <div className="mt-8 flex justify-center gap-4">
                <Button onClick={handleReset} variant="outline">Change File</Button>
-               <Button onClick={handleStartProcessing} disabled={!pdfApiKey}>
-                 <Sparkles className="mr-2 h-4 w-4" />
-                 Start Processing
-               </Button>
+               {savedStateExists ? (
+                 <>
+                   <Button onClick={handleContinueProcess} disabled={!pdfApiKey}>
+                     <RefreshCw className="mr-2 h-4 w-4" />
+                     Continuar Processo
+                   </Button>
+                   <Button onClick={handleReprocess} variant="outline" className="text-orange-600 border-orange-300 hover:bg-orange-50 dark:text-orange-400 dark:border-orange-600 dark:hover:bg-orange-900/20" disabled={!pdfApiKey}>
+                     <RotateCcw className="mr-2 h-4 w-4" />
+                     Reprocessar do Zero
+                   </Button>
+                 </>
+               ) : (
+                 <Button onClick={handleStartProcessing} disabled={!pdfApiKey}>
+                   <Sparkles className="mr-2 h-4 w-4" />
+                   Iniciar Processamento
+                 </Button>
+               )}
              </div>
              {/* API Key requirement message */}
              {!pdfApiKey && (

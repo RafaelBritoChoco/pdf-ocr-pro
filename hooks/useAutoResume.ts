@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export interface AutoResumeState {
   hasIncompleteProcess: boolean;
@@ -14,6 +14,9 @@ export interface AutoResumeState {
  * Hook que detecta automaticamente processos incompletos e permite retomá-los
  */
 export const useAutoResume = () => {
+  // Flag para prevenir execução múltipla do useEffect de inicialização
+  const didMountRef = useRef(false);
+  
   const [autoResumeState, setAutoResumeState] = useState<AutoResumeState>({
     hasIncompleteProcess: false,
     processInfo: null
@@ -25,6 +28,7 @@ export const useAutoResume = () => {
    * Verifica se há processos incompletos salvos no localStorage
    */
   const checkForIncompleteProcess = useCallback(() => {
+    console.log('🔍 [AUTO-RESUME] Verificando processo incompleto no localStorage...');
     try {
       const savedState = window.localStorage.getItem('pdfProcessState');
       if (savedState) {
@@ -32,6 +36,12 @@ export const useAutoResume = () => {
         
         // Verifica se há um processo que não foi finalizado
         if (parsed.processData && !parsed.processData.isCompleted && parsed.processData.isProcessing) {
+          console.log('📋 [AUTO-RESUME] Processo incompleto encontrado:', {
+            fileName: parsed.fileInfo?.name,
+            progress: parsed.processData.progress?.processed,
+            phase: parsed.processData.progress?.phase
+          });
+          
           const processInfo = {
             fileName: parsed.fileInfo?.name || 'Arquivo desconhecido',
             progress: parsed.processData.progress?.processed || 0,
@@ -46,6 +56,7 @@ export const useAutoResume = () => {
 
           // Mostra o diálogo automaticamente após 1 segundo
           setTimeout(() => {
+            console.log('💬 [AUTO-RESUME] Exibindo diálogo de retomada...');
             setShowResumeDialog(true);
             
             // Auto-resume: Automaticamente tenta continuar o processamento após 3 segundos
@@ -67,10 +78,14 @@ export const useAutoResume = () => {
           }, 1000);
 
           return true;
+        } else {
+          console.log('✅ [AUTO-RESUME] Nenhum processo incompleto encontrado');
         }
+      } else {
+        console.log('📭 [AUTO-RESUME] localStorage vazio - nenhum estado salvo');
       }
     } catch (error) {
-      console.error('Erro ao verificar processo incompleto:', error);
+      console.error('❌ [AUTO-RESUME] Erro ao verificar processo incompleto:', error);
     }
 
     setAutoResumeState({
@@ -104,23 +119,35 @@ export const useAutoResume = () => {
    * Remove o estado de processo incompleto
    */
   const dismissIncompleteProcess = useCallback(() => {
+    console.log('🔄 [AUTO-RESUME] Fechando diálogo de retomada...');
+    console.log('🔄 [AUTO-RESUME] didMountRef.current:', didMountRef.current);
     setAutoResumeState({
       hasIncompleteProcess: false,
       processInfo: null
     });
     setShowResumeDialog(false);
+    console.log('✅ [AUTO-RESUME] Diálogo fechado - estado limpo');
   }, []);
 
   /**
-   * Verifica automaticamente ao carregar a página
+   * Verifica automaticamente ao carregar a página - APENAS UMA VEZ
+   * Esta proteção previne a race condition onde re-renderizações 
+   * fazem com que o diálogo reapareça após ser fechado
    */
   useEffect(() => {
-    // Aguarda um pouco para a página carregar completamente
-    const timer = setTimeout(() => {
-      checkForIncompleteProcess();
-    }, 500);
+    // Proteção contra execução múltipla - resolve a race condition
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      
+      console.log('🔄 [AUTO-RESUME] Primeira verificação de processo incompleto...');
+      
+      // Aguarda um pouco para a página carregar completamente
+      const timer = setTimeout(() => {
+        checkForIncompleteProcess();
+      }, 500);
 
-    return () => clearTimeout(timer);
+      return () => clearTimeout(timer);
+    }
   }, [checkForIncompleteProcess]);
 
   return {

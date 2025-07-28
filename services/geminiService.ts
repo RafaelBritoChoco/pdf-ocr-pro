@@ -103,10 +103,21 @@ export async function findProblematicPages(rawText: string): Promise<number[]> {
       });
       console.log('🔍 [DEBUG] llmService.generateContent concluído com sucesso!');
 
-      console.log('✅ [DEBUG] findProblematicPages response recebido:', response.text);
-      const jsonText = response.text;
+      console.log('✅ [DEBUG] findProblematicPages response recebido:', {
+        text: response.response.text,
+        finishReason: response.response.finishReason,
+        hasSafetyRatings: !!response.response.safetyRatings,
+        textLength: response.response.text?.length || 0
+      });
+      
+      const jsonText = response.response.text;
       if (!jsonText) {
-        console.warn("Enhanced analysis returned empty. Using local analysis fallback.");
+        console.warn("❌ [API_EMPTY_RESPONSE] Enhanced analysis returned empty text. Diagnostic info:", {
+          finishReason: response.response.finishReason,
+          safetyRatings: response.response.safetyRatings,
+          candidates: response.response.candidates
+        });
+        console.warn("Using local analysis fallback.");
         return localAnalysis.problematicPages;
       }
       
@@ -244,8 +255,13 @@ For clean extractions: "---CLEAN EXTRACTION---"`
 
       const response = await llmService.generateContent({ model: getModel(), contents: { parts: [imagePart, textPart] }, config: { temperature: 0.1 } });
 
-      const text = response.text;
+      const text = response.response.text;
       if (!text) {
+        console.error("❌ [API_EMPTY_RESPONSE] AI API response for text extraction was empty. Diagnostic info:", {
+          finishReason: response.response.finishReason,
+          safetyRatings: response.response.safetyRatings,
+          candidates: response.response.candidates
+        });
         throw new Error("AI API response for text extraction was empty.");
       }
       
@@ -322,9 +338,14 @@ If no changes were needed, write "---NO CHANGES NEEDED---"`;
       
       const response = await llmService.generateContent({ model: getModel(), contents: { parts: [imagePart, textPart] }, config: { systemInstruction, temperature: 0.1 } });
 
-      const text = response.text;
+      const text = response.response.text;
       if (!text) {
-          throw new Error("AI API response for text processing was empty.");
+        console.error("❌ [API_EMPTY_RESPONSE] AI API response for text processing was empty. Diagnostic info:", {
+          finishReason: response.response.finishReason,
+          safetyRatings: response.response.safetyRatings,
+          candidates: response.response.candidates
+        });
+        throw new Error("AI API response for text processing was empty.");
       }
       
       // Extract changes summary for logging
@@ -366,7 +387,7 @@ export async function reformatDocumentText(rawText: string): Promise<string> {
   const startTime = Date.now();
 
   // Define a threshold for what constitutes a large document.
-  const LARGE_DOCUMENT_THRESHOLD = 50000; // 50k characters
+  const LARGE_DOCUMENT_THRESHOLD = 20000; // 20k characters
 
   // If the document is large, process it in chunks.
   if (rawText.length > LARGE_DOCUMENT_THRESHOLD) {
@@ -421,7 +442,16 @@ CRITICAL FORMATTING RULES:
    - Maintain professional document formatting
    - Each article, section, and paragraph should be clearly separated`;
       
-        console.log('🔍 [REFORMAT_DEBUG] Making API call to llmService.generateContent...');
+        const safetySettingsConfig = {
+          safetySettings: [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+          ],
+        };
+
+        console.log('🔍 [REFORMAT_DEBUG] Making API call to llmService.generateContent with safety settings disabled...');
         
         const response = await llmService.generateContent({ 
           model: getModel(), 
@@ -429,23 +459,30 @@ CRITICAL FORMATTING RULES:
           config: { 
             systemInstruction, 
             temperature: 0.2,
-            maxOutputTokens: 8192 // Set a generous token limit for the output
+            maxOutputTokens: 8192, // Set a generous token limit for the output
+            ...safetySettingsConfig
           } 
         });
         
         console.log('🔍 [REFORMAT_DEBUG] API response received');
         console.log('🔍 [REFORMAT_DEBUG] Response type:', typeof response);
         console.log('🔍 [REFORMAT_DEBUG] Response keys:', Object.keys(response || {}));
-        console.log('🔍 [REFORMAT_DEBUG] Response.text type:', typeof response?.text);
-        console.log('🔍 [REFORMAT_DEBUG] Response.text length:', response?.text?.length || 0);
-        console.log('🔍 [REFORMAT_DEBUG] Response.text preview (first 300 chars):', response?.text?.substring(0, 300) || 'EMPTY');
+        console.log('🔍 [REFORMAT_DEBUG] Response.response.text type:', typeof response?.response?.text);
+        console.log('🔍 [REFORMAT_DEBUG] Response.response.text length:', response?.response?.text?.length || 0);
+        console.log('🔍 [REFORMAT_DEBUG] Response.response.text preview (first 300 chars):', response?.response?.text?.substring(0, 300) || 'EMPTY');
+        console.log('🔍 [REFORMAT_DEBUG] Response finishReason:', response?.response?.finishReason);
+        console.log('🔍 [REFORMAT_DEBUG] Response safetyRatings:', response?.response?.safetyRatings);
         
         const elapsedTime = Date.now() - startTime;
-        console.log(`✅ [REFORMAT_DEBUG] Final formatting completed in ${elapsedTime}ms. Output length: ${response.text?.length || 0}`);
+        console.log(`✅ [REFORMAT_DEBUG] Final formatting completed in ${elapsedTime}ms. Output length: ${response.response.text?.length || 0}`);
         
-        const text = response.text;
+        const text = response.response.text;
         if (!text) {
-          console.log('❌ [REFORMAT_DEBUG] API response.text is empty or null');
+          console.log('❌ [REFORMAT_DEBUG] API response.response.text is empty or null. Diagnostic info:', {
+            finishReason: response.response.finishReason,
+            safetyRatings: response.response.safetyRatings,
+            candidates: response.response.candidates
+          });
           throw new Error("API response for reformatting was empty.");
         }
         
@@ -499,7 +536,7 @@ async function reformatLargeDocumentInChunks(rawText: string): Promise<string> {
         }
       });
       
-      reformattedChunks.push(response.text || chunk); // Use original chunk as fallback
+      reformattedChunks.push(response.response.text || chunk); // Use original chunk as fallback
     } catch (error) {
       console.error(`[ERROR] Failed to format chunk ${i + 1}. Using original text for this chunk.`, error);
       reformattedChunks.push(chunk); // Fallback to the original chunk on error

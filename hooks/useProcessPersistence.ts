@@ -93,10 +93,38 @@ export const useProcessPersistence = <T>(storageKey: string) => {
     }
   }, [storageKey]);
 
+  /**
+   * Checks if there is a saved state for the given file without loading it.
+   *
+   * @param file The file to check for a saved state.
+   * @returns true if a saved state exists for the file, false otherwise.
+   */
+  const hasSavedState = useCallback((file: File): boolean => {
+    try {
+      const item = window.localStorage.getItem(storageKey);
+      if (item) {
+        const savedState = JSON.parse(item) as PersistentProcessState<T>;
+        // Check if the saved state corresponds to the selected file
+        if (
+          savedState.fileInfo &&
+          savedState.fileInfo.name === file.name &&
+          savedState.fileInfo.size === file.size &&
+          savedState.fileInfo.lastModified === file.lastModified
+        ) {
+          return true;
+        }
+      }
+    } catch (error) {
+      console.error(`Error checking saved state from localStorage for key "${storageKey}":`, error);
+    }
+    return false;
+  }, [storageKey]);
+
   return {
     persistedProcessState: persistedState?.processData ?? null,
     loadState,
     saveState,
     clearState,
+    hasSavedState,
   };
 };

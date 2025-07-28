@@ -61,7 +61,7 @@ export const usePdfProcessor = () => {
   const [state, setState] = useState<PdfProcessState>(initialProcessState);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   
-  const { saveState, loadState, clearState: clearPersistedState } = useProcessPersistence<PdfProcessState>(PROCESS_STORAGE_KEY);
+  const { saveState, loadState, clearState: clearPersistedState, hasSavedState } = useProcessPersistence<PdfProcessState>(PROCESS_STORAGE_KEY);
   const stepTimers = useStepTimers(state.stepTimers, state.totalElapsed);
   const debug = DebugClient.getInstance();
 
@@ -425,14 +425,15 @@ export const usePdfProcessor = () => {
     }
   }, [updateState, appendLog, stepTimers]);
 
-  const processPdf = useCallback(async (file: File) => {
+  const processPdf = useCallback(async (file: File, forceReprocess: boolean = false) => {
     setCurrentFile(file);
-    await appendLog(`🚀 processPdf chamado para: ${file.name} (${file.size} bytes)`, 'info', {
+    await appendLog(`🚀 processPdf chamado para: ${file.name} (${file.size} bytes)${forceReprocess ? ' [FORÇAR REPROCESSAMENTO]' : ''}`, 'info', {
       fileSize: file.size,
-      apiKeyConfigured: true
+      apiKeyConfigured: true,
+      forceReprocess
     });
     
-    const loaded = loadState(file);
+    const loaded = forceReprocess ? null : loadState(file);
     
     if (loaded) {
       await appendLog(`📂 Estado salvo encontrado - verificando compatibilidade...`, 'info');
@@ -463,11 +464,17 @@ export const usePdfProcessor = () => {
         await startProcessing(file);
       }
     } else {
-      await appendLog(`🆕 Iniciando novo processamento para: ${file.name}`, 'info');
+      if (forceReprocess) {
+        await appendLog(`🔄 Reprocessando do zero: ${file.name}`, 'info');
+        // Clear any existing state for this file
+        clearPersistedState();
+      } else {
+        await appendLog(`🆕 Iniciando novo processamento para: ${file.name}`, 'info');
+      }
       setState(initialProcessState);
       await startProcessing(file);
     }
-  }, [loadState, startProcessing, appendLog]);
+  }, [loadState, startProcessing, appendLog, clearPersistedState]);
 
   useEffect(() => {
     if (state.stepTimers !== stepTimers.timers || state.totalElapsed !== stepTimers.totalElapsed) {
@@ -580,5 +587,6 @@ export const usePdfProcessor = () => {
     stepTimers,
     resumeFromLocalStorage,
     continueProcessingFromState,
+    hasSavedState,
   };
 };

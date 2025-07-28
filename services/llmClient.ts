@@ -1,5 +1,23 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
+// Extended response type to capture API diagnostics
+export interface GeminiResponse {
+  text?: string;
+  finishReason?: string;
+  safetyRatings?: Array<{
+    category: string;
+    probability: string;
+  }>;
+  candidates?: Array<{
+    content?: any;
+    finishReason?: string;
+    safetyRatings?: Array<{
+      category: string;
+      probability: string;
+    }>;
+  }>;
+}
+
 // API key pode vir das variáveis de ambiente (para desenvolvimento) ou será definida em runtime
 const API_KEY = (process.env.GEMINI_API_KEY as string) || (process.env.API_KEY as string) || '';
 
@@ -17,7 +35,7 @@ export interface LLMService {
     model: string;
     contents: any;
     config?: any;
-  }): Promise<{ text: string }>;
+  }): Promise<{ response: GeminiResponse }>;
 }
 
 /** Override the API key used for LLM calls at runtime */
@@ -62,11 +80,20 @@ export const llmService: LLMService = {
       
       console.log('✅ [DEBUG] llmService response recebido:', {
         textLength: response.text?.length || 0,
-        hasText: !!response.text
+        hasText: !!response.text,
+        finishReason: (response as any).finishReason,
+        hasSafetyRatings: !!((response as any).safetyRatings),
+        hasCandidates: !!((response as any).candidates)
       });
       
+      // Return complete response object for diagnostic purposes
       return {
-        text: response.text || '' // Ensure text is never undefined
+        response: {
+          text: response.text || '',
+          finishReason: (response as any).finishReason,
+          safetyRatings: (response as any).safetyRatings,
+          candidates: (response as any).candidates
+        }
       };
     } catch (error) {
       console.error('❌ [DEBUG] llmService error:', error);
