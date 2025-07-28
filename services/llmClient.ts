@@ -1,14 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-// Default API key; can be overridden via environment or at runtime
-const DEFAULT_API_KEY = 'AIzaSyA8pVrVIGYib2ULJqbyYNAL1klxx4HDXZ0';
-// API key to use, from env or default
-const API_KEY = (process.env.GEMINI_API_KEY as string) || (process.env.API_KEY as string) || DEFAULT_API_KEY;
+// API key deve vir das variáveis de ambiente
+const API_KEY = (process.env.GEMINI_API_KEY as string) || (process.env.API_KEY as string);
 
-console.log('🔑 [DEBUG] LLM Client - API Key source:', {
+if (!API_KEY) {
+  console.error('🚨 ERRO: API Key não encontrada! Configure GEMINI_API_KEY no arquivo .env.local');
+  throw new Error('GEMINI_API_KEY é obrigatória. Crie um arquivo .env.local baseado no .env.example');
+}
+
+console.log('🔑 [DEBUG] LLM Client - API Key configurada:', {
   fromGeminiEnv: !!process.env.GEMINI_API_KEY,
   fromApiEnv: !!process.env.API_KEY,
-  usingDefault: !process.env.GEMINI_API_KEY && !process.env.API_KEY,
   keyLength: API_KEY.length
 });
 
