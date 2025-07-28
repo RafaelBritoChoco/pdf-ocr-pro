@@ -19,7 +19,7 @@ import { PageStatus } from './types';
 export default function App() {
   // Main view: 'ocr' for PDF processing app, 'api' for LLM API tester
   const [mainView, setMainView] = useState<'ocr'|'api'>('ocr');
-  const [pdfApiKey, setPdfApiKey] = useState('AIzaSyClTdMj-LJS0K_Uwcmyw1PbbytaTgru_cU');
+  const [pdfApiKey, setPdfApiKey] = useState('AIzaSyDTJ_gaZVpTzA6XmSWL5yb6Qhy9FYd7Yl8');
   const [debugMinimized, setDebugMinimized] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   

@@ -14,6 +14,8 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 5175,
         strictPort: true,
+        host: '0.0.0.0',
+        allowedHosts: ['5175-iy9y3pzhog55z7mmsq12c-fee79a12.manus.computer'],
         proxy: {
           '/api': {
             target: 'http://localhost:3001',
