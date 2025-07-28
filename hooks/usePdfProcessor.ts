@@ -1,11 +1,13 @@
+
 import { useState, useCallback, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { extractTextFromImage, reformatDocumentText, processPageWithText, findProblematicPages } from '../services/geminiService';
+import { enrichTextWithStructuralTags, extractTextFromImage, processPageWithText, findProblematicPages } from '../services/geminiService';
+import { postProcessFinalText } from '../services/textProcessor'; // Import new textProcessor
 import type { ExtractionResult } from '../types';
 import { PageStatus } from '../types';
 import { useStepTimers, StepTimer } from './useStepTimers';
 import { useProcessPersistence } from './useProcessPersistence';
-import { DebugClient } from '../services/debugClient';
+import { DebugClient } => '../services/debugClient';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.3.93/build/pdf.worker.min.mjs`;
 
@@ -259,22 +261,25 @@ export const usePdfProcessor = () => {
             };
             updateState({ results: [...accumulatedResults] });
         }
-        await appendLog(`🎉 Phase 3 completed`, "info");
+        await appendLog(`🎉 Phase 3 completed`, 'info');
         stepTimers.stopStep("phase3");
       }
 
-      // Phase 4
+      // Phase 4 - AI Enrichment and Final Formatting
       if (!state.stepTimers['phase4']?.endTime) {
-        stepTimers.startStep('phase4', 'Phase 4: AI formatting final document');
-        await appendLog('🎨 Phase 4: AI formatting final document...', 'info');
+        stepTimers.startStep('phase4', 'Phase 4: AI Enrichment and Final Formatting');
+        await appendLog('🎨 Phase 4: AI enriching text with structural tags...', 'info');
         updateState({ isReformatting: true, error: null });
 
-        const rawTextToReformat = accumulatedResults.map(r => r.text ? `${r.text}\n\n--- PAGE ${r.pageNumber} ---\n\n` : "").join('');
-        if(rawTextToReformat.trim().length === 0) throw new Error("No text to reformat.");
+        const rawTextToEnrich = accumulatedResults.map(r => r.text ? `${r.text}\n\n--- PAGE ${r.pageNumber} ---\n\n` : "").join('');
+        if(rawTextToEnrich.trim().length === 0) throw new Error("No text to enrich.");
 
-        const finalFormattedText = await reformatDocumentText(rawTextToReformat);
-        const footnoteRegex = /<fn>.*?<\/fn>|{{footnote\d+/g;
-        const finalAnalysis: FootnoteAnalysisResult = { count: finalFormattedText.match(footnoteRegex)?.length || 0, pages: [] };
+        // Call the new AI enrichment function
+        const enrichedText = await enrichTextWithStructuralTags(rawTextToEnrich);
+        await appendLog('✅ AI enrichment completed. Now applying rule-based formatting...', 'info');
+
+        // Pass the enriched text to the new textProcessor
+        const { formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis } = postProcessFinalText(enrichedText);
         
         updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
         await appendLog('🎉 PROCESSING COMPLETE!', 'info');
@@ -350,69 +355,24 @@ export const usePdfProcessor = () => {
         stepTimers.stopStep('phase3');
       }
 
-      // Phase 4 - Final Formatting
+      // Phase 4 - AI Enrichment and Final Formatting
       if (!restoredState.stepTimers['phase4']?.endTime && !restoredState.formattedText) {
-        stepTimers.startStep('phase4', 'Phase 4: Final formatting');
-        updateState({ 
-          isReformatting: true, 
-          error: null, 
-          currentStatus: '🔄 Preparing final document formatting...' 
-        });
-        await appendLog(`📝 Phase 4: Formatting final document...`, 'info');
+        stepTimers.startStep('phase4', 'Phase 4: AI Enrichment and Final Formatting');
+        await appendLog('🎨 Phase 4: AI enriching text with structural tags...', 'info');
+        updateState({ isReformatting: true, error: null });
+
+        const rawTextToEnrich = accumulatedResults.map(r => r.text ? `${r.text}\n\n--- PAGE ${r.pageNumber} ---\n\n` : "").join('');
+        if(rawTextToEnrich.trim().length === 0) throw new Error("No text to enrich.");
+
+        // Call the new AI enrichment function
+        const enrichedText = await enrichTextWithStructuralTags(rawTextToEnrich);
+        await appendLog('✅ AI enrichment completed. Now applying rule-based formatting...', 'info');
+
+        // Pass the enriched text to the new textProcessor
+        const { formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis } = postProcessFinalText(enrichedText);
         
-        const rawTextToReformat = accumulatedResults.map(r => r.text || '').join('\n\n');
-        
-        // TAREFA 1: DIAGNÓSTICO - Analisar a carga útil (payload)
-        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat length:', rawTextToReformat.length);
-        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat preview (first 500 chars):', rawTextToReformat.substring(0, 500));
-        console.log('🔍 [PHASE4_DEBUG] accumulatedResults count:', accumulatedResults.length);
-        console.log('🔍 [PHASE4_DEBUG] accumulatedResults with text:', accumulatedResults.filter(r => r.text && r.text.length > 0).length);
-        
-        // TAREFA 2: UX FEEDBACK - Estimativa de tempo e status detalhado
-        const estimatedTime = Math.ceil(rawTextToReformat.length / 8000); // ~8000 chars per second
-        updateState({ 
-          currentStatus: `📊 Analyzing ${rawTextToReformat.length} characters (est. ${estimatedTime}s)` 
-        });
-        await appendLog(`📊 Debug: Processando ${rawTextToReformat.length} caracteres de ${accumulatedResults.length} páginas (est. ${estimatedTime}s)`, 'info');
-        
-        if (rawTextToReformat.length < 50) {
-          await appendLog(`⚠️ AVISO: Texto muito curto para reformatação (${rawTextToReformat.length} chars)`, 'warn');
-        }
-        
-        updateState({ 
-          currentStatus: '🤖 Sending to AI for final formatting...' 
-        });
-        await appendLog(`🤖 Enviando para IA para formatação final...`, 'info');
-        
-        const finalFormattedText = await reformatDocumentText(rawTextToReformat);
-        
-        // TAREFA 1: DIAGNÓSTICO - Analisar o resultado
-        console.log('🔍 [PHASE4_DEBUG] finalFormattedText length:', finalFormattedText?.length || 0);
-        console.log('🔍 [PHASE4_DEBUG] finalFormattedText preview (first 500 chars):', finalFormattedText?.substring(0, 500) || 'EMPTY');
-        
-        if (!finalFormattedText || finalFormattedText.length === 0) {
-          updateState({ 
-            currentStatus: '❌ Final formatting failed - empty result',
-            error: 'Final formatting returned empty text'
-          });
-          await appendLog(`❌ ERRO: reformatDocumentText retornou texto vazio!`, 'error');
-          throw new Error('Final formatting returned empty text');
-        }
-        
-        updateState({ 
-          currentStatus: '✅ Analyzing formatted document...' 
-        });
-        await appendLog(`✅ Formatação recebida com sucesso (${finalFormattedText.length} chars)`, 'info');
-        
-        const footnoteRegex = /<fn>.*?<\/fn>|{{footnote\d+/g;
-        const finalAnalysis: FootnoteAnalysisResult = { count: finalFormattedText.match(footnoteRegex)?.length || 0, pages: [] };
-        
-        updateState({ 
-          formattedText: finalFormattedText, 
-          footnoteAnalysis: finalAnalysis,
-          currentStatus: '🎉 Document formatting complete!' 
-        });
-        await appendLog(`🎉 PROCESSING COMPLETE! Final text: ${finalFormattedText.length} chars`, 'info');
+        updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
+        await appendLog('🎉 PROCESSING COMPLETE!', 'info');
         stepTimers.stopStep('phase4');
       }
 
@@ -425,168 +385,28 @@ export const usePdfProcessor = () => {
     }
   }, [updateState, appendLog, stepTimers]);
 
-  const processPdf = useCallback(async (file: File, forceReprocess: boolean = false) => {
-    setCurrentFile(file);
-    await appendLog(`🚀 processPdf chamado para: ${file.name} (${file.size} bytes)${forceReprocess ? ' [FORÇAR REPROCESSAMENTO]' : ''}`, 'info', {
-      fileSize: file.size,
-      apiKeyConfigured: true,
-      forceReprocess
-    });
-    
-    const loaded = forceReprocess ? null : loadState(file);
-    
-    if (loaded) {
-      await appendLog(`📂 Estado salvo encontrado - verificando compatibilidade...`, 'info');
-      setState(loaded);
-      
-      if (loaded.formattedText) {
-        await appendLog(`✅ Processo já estava completo. Restaurado: ${file.name}`, 'info');
-      } else {
-        // Verificar se o progresso faz sentido
-        const totalPages = loaded.progress?.total || 0;
-        const processedPages = loaded.progress?.processed || 0;
-        
-        if (totalPages === 0 && loaded.results && loaded.results.length > 0) {
-          // Corrigir o total baseado nos resultados existentes
-          const correctedState = {
-            ...loaded,
-            progress: {
-              ...loaded.progress,
-              total: loaded.results.length,
-              processed: processedPages
-            }
-          };
-          setState(correctedState);
-          await appendLog(`🔧 Corrigido total de páginas: ${loaded.results.length} páginas`, 'info');
-        }
-        
-        await appendLog(`🔄 Retomando processo para: ${file.name} (Progresso: ${loaded.progress?.processed || 0}/${loaded.progress?.total || loaded.results?.length || 0})`, 'info');
-        await startProcessing(file);
-      }
-    } else {
-      if (forceReprocess) {
-        await appendLog(`🔄 Reprocessando do zero: ${file.name}`, 'info');
-        // Clear any existing state for this file
-        clearPersistedState();
-      } else {
-        await appendLog(`🆕 Iniciando novo processamento para: ${file.name}`, 'info');
-      }
-      setState(initialProcessState);
-      await startProcessing(file);
-    }
-  }, [loadState, startProcessing, appendLog, clearPersistedState]);
-
   useEffect(() => {
-    if (state.stepTimers !== stepTimers.timers || state.totalElapsed !== stepTimers.totalElapsed) {
-      updateState({
-        stepTimers: stepTimers.timers,
-        totalElapsed: stepTimers.totalElapsed,
-      });
-    }
-  }, [stepTimers.timers, stepTimers.totalElapsed, updateState, state.stepTimers, state.totalElapsed]);
-
-  // Level 1 UX: Timer management for reformatting phase
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
-    
-    if (state.isReformatting) {
-      intervalId = setInterval(() => {
-        updateState({ 
-          reformattingTimer: state.reformattingTimer + 1 
-        });
-      }, 1000);
-    } else {
-      // Reset timer when not reformatting
-      if (state.reformattingTimer > 0) {
-        updateState({ reformattingTimer: 0 });
-      }
-    }
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [state.isReformatting, state.reformattingTimer, updateState]);
-
-  const resumeFromLocalStorage = useCallback(async () => {
-    try {
-      await appendLog('🔍 Verificando estado salvo no localStorage...', 'info');
-      const savedState = localStorage.getItem(PROCESS_STORAGE_KEY);
-      
-      if (!savedState) {
-        await appendLog('❌ Nenhum estado salvo encontrado no localStorage', 'warn');
-        return false;
-      }
-
-      await appendLog('📄 Estado encontrado, analisando estrutura...', 'info');
-      const parsed = JSON.parse(savedState);
-      
-      if (!parsed.processData || !parsed.fileInfo) {
-        await appendLog('⚠️ Estrutura de dados inválida no localStorage', 'warn', {
-          hasProcessData: !!parsed.processData,
-          hasFileInfo: !!parsed.fileInfo,
-          keys: Object.keys(parsed)
-        });
-        return false;
-      }
-
-      await appendLog('✅ Estrutura válida encontrada, restaurando estado...', 'info', {
-        fileName: parsed.fileInfo.name,
-        progress: `${parsed.processData.progress?.processed || 0}/${parsed.processData.progress?.total || 0}`,
-        phase: parsed.processData.progress?.phase || 'unknown',
-        isCompleted: parsed.processData.isCompleted,
-        resultsCount: parsed.processData.results?.length || 0
-      });
-
-      // Restore the state directly, but ensure progress consistency
-      const restoredState = {
-        ...parsed.processData,
-        // Se o total for 0 mas temos resultados, corrigir o total baseado nos resultados
-        progress: {
-          ...parsed.processData.progress,
-          total: parsed.processData.progress?.total || parsed.processData.results?.length || 0
+    if (currentFile && hasSavedState(currentFile)) {
+      const saved = loadState(currentFile);
+      if (saved) {
+        setState(saved);
+        appendLog(`💾 Restored state for ${currentFile.name}`, 'info');
+        // If a process was interrupted, try to continue it
+        if (saved.isProcessing && !saved.isCompleted) {
+          continueProcessingFromState(saved);
         }
-      };
-      
-      await appendLog(`🔧 Estado corrigido - Progresso final: ${restoredState.progress.processed}/${restoredState.progress.total}`, 'info');
-      
-      setState(restoredState);
-      
-      // Create a mock file object for reference
-      const mockFile = new File([], parsed.fileInfo.name, {
-        type: 'application/pdf',
-        lastModified: parsed.fileInfo.lastModified
-      });
-      setCurrentFile(mockFile);
-      
-      await appendLog(`🎉 Processo retomado com sucesso: ${parsed.fileInfo.name}`, 'info');
-      
-      // Se o processo não estiver completo, continuar automaticamente
-      if (!restoredState.isCompleted && !restoredState.formattedText) {
-        await appendLog(`🔄 Continuando processamento automaticamente da página ${restoredState.progress.processed + 1}...`, 'info');
-        
-        // Continuar processamento das fases restantes sem re-extrair páginas
-        await continueProcessingFromState(restoredState);
       }
-      
-      return true;
-    } catch (error) {
-      await appendLog(`❌ Erro ao retomar processo: ${error}`, 'error', { 
-        error: error instanceof Error ? error.message : String(error) 
-      });
-      console.error('Erro ao retomar do localStorage:', error);
     }
-    return false;
-  }, [appendLog]);
+  }, [currentFile, hasSavedState, loadState, appendLog, continueProcessingFromState]);
 
   return {
-    ...state,
-    processPdf,
+    startProcessing,
     clear,
+    state,
+    setCurrentFile,
+    currentFile,
     stepTimers,
-    resumeFromLocalStorage,
-    continueProcessingFromState,
-    hasSavedState,
   };
 };
+
+

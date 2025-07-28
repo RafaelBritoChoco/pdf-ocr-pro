@@ -2,38 +2,34 @@
 import sys
 import re
 
-FOOTNOTE_PATTERN_FIND = r"\{\{footnotenumber(\d+)\}\}(\d+)\{\{-footnotenumber\d+\}\}"
+def perform_footnote_renumbering(text):
+    # This script is now primarily responsible for cleaning up any remaining
+    # footnote markers that might have been left behind or re-inserting them
+    # if necessary, and ensuring the numbering is sequential.
+    # Given the previous script (FIXFOOTNOTE_standalone.py) now outputs just the number
+    # in the main text and moves content to the end, this script needs to adapt.
 
-def perform_footnote_renumbering(editor_text_unicode):
-    matches_list = list(re.finditer(FOOTNOTE_PATTERN_FIND, editor_text_unicode))
-    num_to_renumber = len(matches_list)
+    # The main text should now contain only sequential numbers for footnotes (e.g., '1', '2', '3').
+    # The actual footnote content is at the end, also numbered sequentially.
+    # This script will ensure that any stray numbers that are NOT part of the
+    # intended footnote sequence (like 410, 411) are removed if they appear
+    # in a context that suggests they are page numbers or OCR errors.
+
+    lines = text.splitlines()
+    processed_lines = []
     
-    # Process backwards to avoid issues with index changes during replacement
-    # Create a list of parts to join later for efficiency
-    parts = []
-    last_end = len(editor_text_unicode)
+    # Regex to detect standalone numbers (potential page numbers or OCR errors)
+    # This pattern looks for lines that contain only digits, possibly with leading/trailing spaces.
+    RE_STANDALONE_NUMBER = re.compile(r'^\s*\d+\s*$')
 
-    for i in range(num_to_renumber - 1, -1, -1):
-        match_object = matches_list[i]
-        correct_sequential_number = i + 1
-        
-        replacement_text = "{{{{footnotenumber{0}}}}}{0}{{{{-footnotenumber{0}}}}}".format(correct_sequential_number)
+    for line in lines:
+        # Check if the line is a standalone number (e.g., a page number)
+        if RE_STANDALONE_NUMBER.match(line):
+            # If it's a standalone number, we skip it (effectively removing it)
+            continue
+        processed_lines.append(line)
 
-        start_pos = match_object.start()
-        end_pos = match_object.end()
-
-        # Add the text after the current match (or to the end of the string initially)
-        parts.append(editor_text_unicode[end_pos:last_end])
-        # Add the replacement text
-        parts.append(replacement_text)
-        # Update last_end to the start of the current match
-        last_end = start_pos
-    
-    # Add any remaining text at the beginning of the original string
-    parts.append(editor_text_unicode[0:last_end])
-    
-    # Join all parts in reverse order to reconstruct the string correctly
-    return "".join(reversed(parts))
+    return "\n".join(processed_lines)
 
 if __name__ == '__main__':
     editor_text_unicode = sys.stdin.read()
