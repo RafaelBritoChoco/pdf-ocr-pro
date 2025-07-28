@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 require('dotenv').config();
 const { GoogleGenAI } = require('@google/genai');
 
@@ -16,6 +17,12 @@ const logs = [];
 const errors = [];
 const MAX_LOGS = 1000;
 const MAX_ERRORS = 100;
+
+/**
+ * Gestor de tarefas em memória para processamento assíncrono
+ * Cada tarefa tem: status, message, result, error, createdAt
+ */
+const tasks = {};
 
 // Função helper para logging
 function addLog(level, message, data, source = 'server') {
@@ -60,9 +67,9 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Endpoint original do Gemini com logging melhorado
+// Endpoint para processamento assíncrono do Gemini
 app.post('/api/generate', async (req, res) => {
-  addLog('info', 'Gemini API request initiated', { model: req.body.model }, 'gemini');
+  addLog('info', 'Gemini API async task initiated', { model: req.body.model }, 'gemini');
   
   try {
     const { apiKey, model, contents, config } = req.body;
@@ -71,32 +78,196 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: 'apiKey is required' });
     }
     
-    addLog('debug', 'Creating Gemini client', { model }, 'gemini');
-    const ai = new GoogleGenAI({ apiKey });
+    // Gerar taskId único e inicializar tarefa
+    const taskId = crypto.randomUUID();
+    tasks[taskId] = {
+      status: 'pending',
+      message: 'Tarefa iniciada, preparando processamento...',
+      result: null,
+      error: null,
+      createdAt: new Date().toISOString()
+    };
     
-    addLog('debug', 'Sending request to Gemini', { model, contentsLength: contents?.length }, 'gemini');
-    const response = await ai.models.generateContent({ model, contents, config });
+    addLog('info', 'Task created', { taskId, model }, 'task-manager');
     
-    addLog('info', 'Gemini API request successful', { 
-      model, 
-      responseLength: response.text?.length 
-    }, 'gemini');
+    // Responder imediatamente com taskId
+    res.status(202).json({ taskId });
     
-    res.json({ text: response.text });
+    // Iniciar processamento assíncrono
+    (async () => {
+      try {
+        // Atualizar status para processamento
+        tasks[taskId].status = 'processing';
+        tasks[taskId].message = 'Conectando com IA Gemini...';
+        addLog('debug', 'Task processing started', { taskId }, 'task-manager');
+        
+        // Criar cliente Gemini
+        const ai = new GoogleGenAI({ apiKey });
+        tasks[taskId].message = 'Enviando dados para análise de IA...';
+        
+        // Fazer chamada para Gemini
+        addLog('debug', 'Sending request to Gemini', { taskId, model, contentsLength: contents?.length }, 'gemini');
+        const response = await ai.models.generateContent({ model, contents, config });
+        
+        // Atualizar para formatação
+        tasks[taskId].status = 'formatting';
+        tasks[taskId].message = 'Formatando resposta final...';
+        
+        // Simular tempo de formatação (remover em produção se não houver formatação adicional)
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Concluir tarefa
+        tasks[taskId].status = 'completed';
+        tasks[taskId].message = 'Processamento concluído com sucesso!';
+        tasks[taskId].result = response.text;
+        
+        addLog('info', 'Task completed successfully', { 
+          taskId, 
+          model, 
+          responseLength: response.text?.length 
+        }, 'task-manager');
+        
+      } catch (err) {
+        // Falha na tarefa
+        tasks[taskId].status = 'failed';
+        tasks[taskId].message = `Erro no processamento: ${err.message}`;
+        tasks[taskId].error = err.message;
+        
+        addError(`Task ${taskId} failed`, err.stack, {
+          message: err.message,
+          code: err.code,
+          taskId
+        });
+      }
+    })();
+    
   } catch (err) {
-    addError('LLM API error', err.stack, {
+    addError('Task creation error', err.stack, {
       message: err.message,
-      code: err.code,
       body: req.body
     });
     
-    const details = {
-      message: err.message,
-      code: err.code || null,
-      stack: err.stack || null
-    };
-    res.status(500).json({ error: 'LLM error', ...details });
+    res.status(500).json({ error: 'Failed to create task', message: err.message });
   }
+});
+
+/**
+ * Endpoint para polling do status da tarefa
+ * GET /api/task-status/:taskId
+ */
+app.get('/api/task-status/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = tasks[taskId];
+  
+  if (!task) {
+    addLog('warn', 'Task not found', { taskId }, 'task-manager');
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  
+  addLog('debug', 'Task status requested', { taskId, status: task.status }, 'task-manager');
+  
+  res.json({
+    status: task.status,
+    message: task.message
+  });
+});
+
+/**
+ * Endpoint para obter o resultado final da tarefa
+ * GET /api/task-result/:taskId
+ */
+app.get('/api/task-result/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = tasks[taskId];
+  
+  if (!task) {
+    addLog('warn', 'Task not found for result', { taskId }, 'task-manager');
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  
+  if (task.status !== 'completed') {
+    addLog('warn', 'Task result requested but not completed', { taskId, status: task.status }, 'task-manager');
+    return res.status(404).json({ error: 'Task not completed yet' });
+  }
+  
+  addLog('info', 'Task result delivered', { taskId }, 'task-manager');
+  
+  // Opcional: remover tarefa após entregar resultado
+  const result = task.result;
+  delete tasks[taskId];
+  
+  res.json({ result });
+});
+
+/**
+ * Endpoint para streaming de dados da tarefa em tempo real
+ * GET /api/task-stream/:taskId
+ */
+app.get('/api/task-stream/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = tasks[taskId];
+  
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  
+  // Configurar cabeçalhos para Server-Sent Events (SSE)
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+  
+  // Função para enviar dados
+  const sendData = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  // Enviar estado atual imediatamente
+  sendData({
+    status: task.status,
+    message: task.message,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Configurar polling para atualizações
+  const intervalId = setInterval(() => {
+    const currentTask = tasks[taskId];
+    
+    if (!currentTask) {
+      // Tarefa foi removida, encerrar stream
+      res.write('event: close\ndata: Task completed and cleaned up\n\n');
+      res.end();
+      clearInterval(intervalId);
+      return;
+    }
+    
+    // Enviar atualização de status
+    sendData({
+      status: currentTask.status,
+      message: currentTask.message,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Se completou, encerrar stream após enviar resultado
+    if (currentTask.status === 'completed' || currentTask.status === 'failed') {
+      setTimeout(() => {
+        res.write('event: close\ndata: Stream complete\n\n');
+        res.end();
+        clearInterval(intervalId);
+      }, 1000); // Aguardar 1 segundo antes de fechar
+    }
+  }, 1000); // Atualizar a cada 1 segundo para stream mais responsivo
+  
+  // Limpar recursos quando cliente desconectar
+  req.on('close', () => {
+    clearInterval(intervalId);
+    addLog('debug', 'Client disconnected from task stream', { taskId }, 'task-manager');
+  });
+  
+  addLog('debug', 'Task stream started', { taskId }, 'task-manager');
 });
 
 // Endpoint para LLM acessar logs em tempo real

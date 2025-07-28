@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { ExtractionResult } from '../types';
 import { PageStatus } from '../types';
 import { Card } from './ui/Card';
+import { SearchCheck, Bot } from './icons';
 
 export interface ProcessingViewProps {
   results: ExtractionResult[];
@@ -9,6 +10,9 @@ export interface ProcessingViewProps {
   isReformatting: boolean;
   progress: { processed: number; total: number; phase: string; phaseProgress: string };
   error: string | null;
+  processingMessage?: string | null;
+  reformattingTimer?: number;
+  footnoteAnalysis?: { count: number; pages: number[] } | null;
 }
 
 const getStatusColor = (status: PageStatus) => {
@@ -32,21 +36,37 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({
   isProcessing, 
   isReformatting, 
   progress, 
-  error 
+  error,
+  processingMessage,
+  reformattingTimer = 0,
+  footnoteAnalysis
 }) => {
   const [selectedPage, setSelectedPage] = useState<number>(1);
   
   const currentResult = results.find(r => r.pageNumber === selectedPage);
 
+  // Helper function to format timer
+  const formatTimer = (seconds: number): string => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
   const getProcessingMessage = () => {
+    if (processingMessage) {
+      return processingMessage;
+    }
     if (isReformatting) {
-      return "Phase 4: Formatting final document...";
+      const timerDisplay = reformattingTimer > 0 ? ` (${formatTimer(reformattingTimer)})` : '';
+      return `Phase 4: Formatting final document...${timerDisplay}`;
     }
     if (isProcessing) {
       return progress.phase;
     }
     return "Processing completed";
-  };  const getProgressPercentage = () => {
+  };
+
+  const getProgressPercentage = () => {
     if (isReformatting) return 95;
     if (progress.total === 0) return 0;
     
@@ -59,15 +79,62 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({
     return baseProgress;
   };
 
+  // Vista 1: Análise inicial do PDF (quando não há resultados ainda)
   if (results.length === 0 && isProcessing) {
-      return (
-          <div className="w-full text-center">
-              <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-primary-500 mx-auto"></div>
-              <p className="mt-4 text-lg font-medium dark:text-slate-200">Analisando o PDF...</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400">Isso pode levar alguns instantes.</p>
-          </div>
-      );
+    return (
+      <div className="w-full text-center">
+        <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-primary-500 mx-auto"></div>
+        <p className="mt-4 text-lg font-medium dark:text-slate-200">Analisando o PDF...</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Isso pode levar alguns instantes.</p>
+      </div>
+    );
   }
+
+  // Vista 2: Análise de notas de rodapé (step 3)
+  if (isProcessing && progress.phase.includes('Analyzing') && footnoteAnalysis !== undefined) {
+    return (
+      <div className="w-full text-center flex flex-col items-center justify-center">
+        <SearchCheck className="w-16 h-16 text-primary-500" />
+        <p className="mt-4 text-lg font-medium dark:text-slate-200">Analyzing Footnotes...</p>
+        <div className="mt-2 text-sm text-slate-500 dark:text-slate-400 min-h-[42px]">
+          {footnoteAnalysis && footnoteAnalysis.count > 0 && (
+            <div className="animate-fade-in">
+              <p><strong>{footnoteAnalysis.count}</strong> notes found on pages: {footnoteAnalysis.pages.join(', ')}.</p>
+              <p className="mt-1">Continuing to final formatting...</p>
+            </div>
+          )}
+          {footnoteAnalysis && footnoteAnalysis.count === 0 && (
+            <div className="animate-fade-in">
+              <p>No footnotes found.</p>
+              <p className="mt-1">Proceeding to finalization...</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Vista 3: Finalização com IA (step 4 - isReformatting)
+  if (isReformatting) {
+    return (
+      <div className="w-full text-center flex flex-col items-center justify-center">
+        <Bot className="w-16 h-16 text-primary-500 animate-bounce" />
+        <p className="mt-4 text-lg font-medium dark:text-slate-200">
+          Finalizing with AI...
+          {reformattingTimer > 0 && (
+            <span className="ml-2 text-primary-600 dark:text-primary-400 font-mono">
+              ({formatTimer(reformattingTimer)})
+            </span>
+          )}
+        </p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Gathering text, removing artifacts and formatting the final document.
+        </p>
+      </div>
+    );
+  }
+
+  // Vista 4: Vista principal com lista de páginas (processamento normal)
 
   return (
     <div className="w-full flex flex-col lg:flex-row gap-6">

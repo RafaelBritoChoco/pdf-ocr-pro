@@ -33,6 +33,8 @@ interface PdfProcessState {
   stepTimers: Record<string, StepTimer>;
   totalElapsed: number;
   isCompleted: boolean;
+  processingMessage: string | null;
+  reformattingTimer: number;
 }
 
 const initialProcessState: PdfProcessState = {
@@ -47,6 +49,8 @@ const initialProcessState: PdfProcessState = {
   stepTimers: {},
   totalElapsed: 0,
   isCompleted: false,
+  processingMessage: null,
+  reformattingTimer: 0,
 };
 
 const PROCESS_STORAGE_KEY = 'pdfProcessState';
@@ -159,11 +163,14 @@ export const usePdfProcessor = () => {
           if (!context) throw new Error("Could not get canvas context");
           canvas.height = viewport.height;
           canvas.width = viewport.width;
+          
+          // A LINHA CRÍTICA QUE ESTAVA EM FALTA:
+          const textContent = await page.getTextContent();
           const rawPageText = textContent.items.map((item: any) => item.str).join(" ").trim();
 
           // Check if rawPageText is sufficient (e.g., has enough characters)
           if (rawPageText.length > 200) { // Threshold for considering text sufficient
-            accumulatedResults[i-1] = { ...accumulatedResults[i-1], text: rawPageText, status: PageStatus.COMPLETED, method: 'Native Extraction' };
+            accumulatedResults[i-1] = { ...accumulatedResults[i-1], text: rawPageText, status: PageStatus.COMPLETED, method: 'Quick Text' };
           } else {
             // If rawPageText is not sufficient, then generate image and mark for AI processing
             await page.render({ canvasContext: context, viewport: viewport }).promise;
@@ -246,7 +253,7 @@ export const usePdfProcessor = () => {
                 text: resultText, 
                 status: PageStatus.COMPLETED, 
                 changes: changesSummary, 
-                method: (imageUrl && rawText && rawText.length > 50) ? 'AI Correction' : (imageUrl ? 'AI OCR' : 'Native Extraction (re-analyzed)') 
+                method: (imageUrl && rawText && rawText.length > 50) ? 'AI Correction' : (imageUrl ? 'AI OCR' : 'Quick Text') 
             };
             updateState({ results: [...accumulatedResults] });
         }
@@ -418,6 +425,30 @@ export const usePdfProcessor = () => {
       });
     }
   }, [stepTimers.timers, stepTimers.totalElapsed, updateState, state.stepTimers, state.totalElapsed]);
+
+  // Level 1 UX: Timer management for reformatting phase
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+    
+    if (state.isReformatting) {
+      intervalId = setInterval(() => {
+        updateState({ 
+          reformattingTimer: state.reformattingTimer + 1 
+        });
+      }, 1000);
+    } else {
+      // Reset timer when not reformatting
+      if (state.reformattingTimer > 0) {
+        updateState({ reformattingTimer: 0 });
+      }
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [state.isReformatting, state.reformattingTimer, updateState]);
 
   const resumeFromLocalStorage = useCallback(async () => {
     try {

@@ -5,7 +5,7 @@ import { ProcessingView } from './components/ProcessingView';
 import { WorkflowStepper } from './components/WorkflowStepper';
 import { usePdfProcessor } from './hooks/usePdfProcessor';
 import { Button } from './components/ui/Button';
-import { FileText, Download, Sparkles, RefreshCw, Bot, SearchCheck } from './components/icons';
+import { FileText, Download, Sparkles, RefreshCw } from './components/icons';
 import { FinalPreview } from './components/FinalPreview';
 import { Card } from './components/ui/Card';
 import { DetailedStatus } from './components/DetailedStatus';
@@ -18,7 +18,7 @@ import { DebugClient } from './services/debugClient';
 export default function App() {
   // Main view: 'ocr' for PDF processing app, 'api' for LLM API tester
   const [mainView, setMainView] = useState<'ocr'|'api'>('ocr');
-  const [pdfApiKey, setPdfApiKey] = useState('AIzaSyAQ2G3iTq-ncvefA-a6T8dfo_VYR1IudzU');
+  const [pdfApiKey, setPdfApiKey] = useState('AIzaSyClTdMj-LJS0K_Uwcmyw1PbbytaTgru_cU');
   const [debugMinimized, setDebugMinimized] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   
@@ -41,7 +41,9 @@ export default function App() {
     error, 
     clear,
     resumeFromLocalStorage,
-    continueProcessingFromState
+    continueProcessingFromState,
+    processingMessage,
+    reformattingTimer
   } = usePdfProcessor();
 
   // Auto-resume functionality
@@ -312,6 +314,8 @@ export default function App() {
            </div>
          );
        case 2:
+       case 3:
+       case 4:
          return (
            <div className="w-full space-y-6">
              <DetailedStatus
@@ -329,36 +333,10 @@ export default function App() {
                isReformatting={isReformatting}
                progress={progress} 
                error={error}
+               processingMessage={processingMessage}
+               reformattingTimer={reformattingTimer}
+               footnoteAnalysis={footnoteAnalysis}
              />
-           </div>
-         );
-       case 3:
-         return (
-            <div className="w-full text-center flex flex-col items-center justify-center">
-               <SearchCheck className="w-16 h-16 text-primary-500" />
-               <p className="mt-4 text-lg font-medium dark:text-slate-200">Analyzing Footnotes...</p>
-               <div className="mt-2 text-sm text-slate-500 dark:text-slate-400 min-h-[42px]">
-                 {footnoteAnalysis && footnoteAnalysis.count > 0 && (
-                   <div className="animate-fade-in">
-                       <p><strong>{footnoteAnalysis.count}</strong> notes found on pages: {footnoteAnalysis.pages.join(', ')}.</p>
-                       <p className="mt-1">Continuing to final formatting...</p>
-                   </div>
-                 )}
-                 {footnoteAnalysis && footnoteAnalysis.count === 0 && (
-                     <div className="animate-fade-in">
-                       <p>No footnotes found.</p>
-                       <p className="mt-1">Proceeding to finalization...</p>
-                     </div>
-                 )}
-               </div>
-           </div>
-         );
-       case 4:
-         return (
-            <div className="w-full text-center flex flex-col items-center justify-center">
-               <Bot className="w-16 h-16 text-primary-500 animate-bounce" />
-               <p className="mt-4 text-lg font-medium dark:text-slate-200">Finalizing with AI...</p>
-               <p className="text-sm text-slate-500 dark:text-slate-400">Gathering text, removing artifacts and formatting the final document.</p>
            </div>
          );
        case 5:
