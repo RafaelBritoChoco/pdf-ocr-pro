@@ -18,3 +18,8 @@ export interface ExtractionResult {
   method: ExtractionMethod;
   changes?: string; // Description of changes made by AI
 }
+
+export interface FootnoteAnalysisResult {
+  count: number;
+  pages: number[];
+}

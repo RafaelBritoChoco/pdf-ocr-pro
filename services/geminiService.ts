@@ -1,4 +1,4 @@
-import { Type, llmService } from "./llmClient";
+import { llmService } from "./llmClient";
 
 // Default Gemini model for PDF processing; overrideable by localStorage 'selectedModel'
 const DEFAULT_MODEL = 'gemini-2.5-flash';
@@ -44,169 +44,6 @@ const withRetry = async <T>(apiCall: () => Promise<T>, maxRetries = 3, initialDe
     }
   }
 };
-
-/**
- * Uses AI to analyze the raw text of an entire document to find pages with likely extraction errors.
- * @param rawText The combined raw text from all pages, with page separators.
- * @returns A promise that resolves to an array of page numbers that need correction.
- */
-export async function findProblematicPages(rawText: string): Promise<number[]> {
-  console.log('🔍 [DEBUG] findProblematicPages iniciado, texto length:', rawText.length);
-  
-  // Primeiro, fazer análise local para identificar problemas óbvios
-  console.log('🔍 [DEBUG] Iniciando análise local...');
-  const localAnalysis = analyzeTextQualityLocally(rawText);
-  console.log('🔍 [DEBUG] Análise local encontrou:', localAnalysis.issues);
-  console.log('🔍 [DEBUG] Páginas problemáticas localmente:', localAnalysis.problematicPages);
-  
-  try {
-    console.log('🔍 [DEBUG] Iniciando withRetry para chamada à AI...');
-    return await withRetry(async () => {
-      console.log('🔍 [DEBUG] Preparando prompt para AI...');
-      const systemInstruction = `You are a document analysis expert specializing in PDF text extraction quality. Analyze the provided text for extraction problems that require OCR correction.
-
-      CRITICAL: Be MORE SENSITIVE to quality issues. Look for:
-      
-      **ALWAYS FLAG FOR OCR if you find:**
-      - Pages with poor formatting (weird line breaks, spacing issues)
-      - Text that looks like it came from a scanned document
-      - Missing spaces between words or odd character spacing
-      - Any signs that this came from image-to-text conversion rather than native PDF text
-      - Broken paragraph structure or awkward text flow
-      - Mixed fonts or inconsistent character rendering
-      
-      **ALSO FLAG:**
-      - Garbled or nonsensical text
-      - Incomplete tables/lists  
-      - Pages with very little text (under 200 chars)
-      - Missing punctuation or formatting
-      - Footnote markers without corresponding text
-      
-      **BE AGGRESSIVE**: When in doubt, flag the page for OCR. It's better to re-process a good page than miss a poor extraction.
-      
-      Document has page breaks marked '--- END OF PAGE X ---'.
-      
-      Return JSON array of page numbers needing OCR. If text quality seems poor overall, consider flagging ALL pages.
-      
-      Example: [1, 2, 3] for a 3-page document with quality issues`;
-
-      console.log('🔍 [DEBUG] Fazendo chamada para llmService.generateContent...');
-      const response = await llmService.generateContent({
-        model: getModel(),
-        contents: rawText,
-        config: {
-          systemInstruction,
-          temperature: 0.1, // Slight randomness for better detection
-          responseMimeType: "application/json",
-          responseSchema: { type: Type.ARRAY, items: { type: Type.INTEGER } }
-        }
-      });
-      console.log('🔍 [DEBUG] llmService.generateContent concluído com sucesso!');
-
-      console.log('✅ [DEBUG] findProblematicPages response recebido:', {
-        text: response.response.text,
-        finishReason: response.response.finishReason,
-        hasSafetyRatings: !!response.response.safetyRatings,
-        textLength: response.response.text?.length || 0
-      });
-      
-      const jsonText = response.response.text;
-      if (!jsonText) {
-        console.warn("❌ [API_EMPTY_RESPONSE] Enhanced analysis returned empty text. Diagnostic info:", {
-          finishReason: response.response.finishReason,
-          safetyRatings: response.response.safetyRatings,
-          candidates: response.response.candidates
-        });
-        console.warn("Using local analysis fallback.");
-        return localAnalysis.problematicPages;
-      }
-      
-      // Handle potential markdown code block fences
-      const cleanedJsonText = jsonText.replace(/^```json\n?/, '').replace(/```$/, '');
-      const pageNumbers = JSON.parse(cleanedJsonText);
-      
-      // Combinar com análise local
-      const combinedPages = [...new Set([...pageNumbers, ...localAnalysis.problematicPages])];
-      
-      console.log('📋 [DEBUG] Páginas problemáticas detectadas:', combinedPages);
-      console.log('🔍 [DEBUG] Detalhes da análise:', {
-        aiDetected: pageNumbers,
-        localDetected: localAnalysis.problematicPages,
-        combined: combinedPages,
-        reasons: localAnalysis.issues
-      });
-      
-      if (!Array.isArray(combinedPages) || !combinedPages.every(n => typeof n === 'number')) {
-          throw new Error("Invalid format for problematic pages.");
-      }
-      return combinedPages;
-    });
-  } catch (error) {
-    console.error("Error in findProblematicPages after retries:", error);
-    console.warn("Using local analysis as fallback");
-    return localAnalysis.problematicPages.length > 0 ? localAnalysis.problematicPages : []; 
-  }
-}
-
-// Análise local para detectar problemas básicos de formatação
-function analyzeTextQualityLocally(rawText: string): { issues: string[], problematicPages: number[] } {
-  const issues: string[] = [];
-  const problematicPages: number[] = [];
-  
-  // Dividir por páginas
-  const pageTexts = rawText.split(/--- END OF PAGE \d+ ---/);
-  
-  pageTexts.forEach((pageText, index) => {
-    const pageNum = index + 1;
-    const pageIssues: string[] = [];
-    const trimmedText = pageText.trim();
-    
-    if (trimmedText.length === 0) return; // Skip empty pages
-    
-    // Verificar comprimento muito baixo
-    if (trimmedText.length < 200) {
-      pageIssues.push('Texto muito curto');
-      problematicPages.push(pageNum);
-    }
-    
-    // Verificar quebras de linha estranhas (texto cortado)
-    const oddLineBreaks = trimmedText.match(/\w\n\w/g);
-    if (oddLineBreaks && oddLineBreaks.length > 3) {
-      pageIssues.push('Quebras de linha suspeitas');
-      problematicPages.push(pageNum);
-    }
-    
-    // Verificar falta de espaços entre palavras
-    const missingSpaces = trimmedText.match(/[a-z][A-Z]/g);
-    if (missingSpaces && missingSpaces.length > 5) {
-      pageIssues.push('Possível falta de espaços');
-      problematicPages.push(pageNum);
-    }
-    
-    // Verificar densidade de caracteres especiais (pode indicar OCR ruim)
-    const specialChars = trimmedText.match(/[^\w\s\-.,;:'"!?()[\]{}]/g);
-    if (specialChars && specialChars.length > trimmedText.length * 0.05) {
-      pageIssues.push('Muitos caracteres especiais');
-      problematicPages.push(pageNum);
-    }
-    
-    // Verificar se o texto parece vir de scan (muito quebrado)
-    const brokenWords = trimmedText.match(/\b\w{1,2}\b/g);
-    if (brokenWords && brokenWords.length > trimmedText.split(/\s+/).length * 0.3) {
-      pageIssues.push('Palavras muito fragmentadas');
-      problematicPages.push(pageNum);
-    }
-    
-    if (pageIssues.length > 0) {
-      issues.push(`Página ${pageNum}: ${pageIssues.join(', ')}`);
-    }
-  });
-  
-  return {
-    issues,
-    problematicPages: [...new Set(problematicPages)]
-  };
-}
 
 
 /**
@@ -374,176 +211,51 @@ If no changes were needed, write "---NO CHANGES NEEDED---"`;
   }
 }
 
-
 /**
- * Takes raw text from an entire document and uses the Gemini API to reformat it.
- * This function handles large documents by splitting them into chunks to avoid API limits and timeouts.
- * @param rawText The combined raw text from all pages, with page separators.
- * @returns A promise that resolves to the cleaned and custom-formatted document text.
+ * Uses the AI for a single, focused task: to analyze raw text and enrich it with structural XML-like tags.
+ * This is Stage 2 of the formatting pipeline.
+ * @param rawText The entire document's raw text.
+ * @returns A promise that resolves to the text enriched with structural tags.
  */
-export async function reformatDocumentText(rawText: string): Promise<string> {
-  console.log(`🔍 [REFORMAT_DEBUG] Starting final document reformatting. Text length: ${rawText.length} chars.`);
-  console.log(`🔍 [REFORMAT_DEBUG] Raw text preview (first 300 chars):`, rawText.substring(0, 300));
-  const startTime = Date.now();
+export async function enrichTextWithStructuralTags(rawText: string): Promise<string> {
+    console.log(`[geminiService] Starting AI structural enrichment. Text length: ${rawText.length}`);
 
-  // Define a threshold for what constitutes a large document.
-  const LARGE_DOCUMENT_THRESHOLD = 20000; // 20k characters
+    const systemInstruction = `You are a structural text analyzer for legal documents. Your ONLY task is to analyze the following raw text and wrap each distinct element in a simple structural tag. DO NOT alter, correct, or rephrase the content in any way. Preserve every original word, punctuation mark, and line break within elements.
 
-  // If the document is large, process it in chunks.
-  if (rawText.length > LARGE_DOCUMENT_THRESHOLD) {
-    console.log(`🔍 [REFORMAT_DEBUG] Large document detected (${rawText.length} chars), using chunks`);
-    return reformatLargeDocumentInChunks(rawText);
-  }
+    - Wrap headings, article titles, and chapter titles in <h>...</h>.
+    - Wrap numbered or lettered list items in <li>...</li>.
+    - Wrap regular paragraphs of text (any block of text that is not a heading, list item, or footnote) in <p>...</p>.
+    - Wrap the full content of footnote definitions (usually at the bottom of a page, starting with a number or symbol) in <fn>...</fn>.
 
-  console.log(`🔍 [REFORMAT_DEBUG] Small document, processing in single request`);
+    Example Input:
+    ARTICLE 1
+    The trade between the two countries...
+    continues on this line.
 
-  // For smaller documents, process them in a single request with a timeout.
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      console.log(`❌ [REFORMAT_DEBUG] Timeout reached after 180 seconds`);
-      reject(new Error('reformatDocumentText timed out after 180 seconds.'));
-    }, 180000); // 3-minute timeout
-  });
+    1. For the purposes of this...
+    ¹ This is a footnote.
 
-  try {
-    return await Promise.race([
-      timeoutPromise,
-      withRetry(async () => {
-        console.log('🔍 [REFORMAT_DEBUG] Sending single request to Gemini API for final formatting...');
-        console.log('🔍 [REFORMAT_DEBUG] Using model:', getModel());
-        console.log('🔍 [REFORMAT_DEBUG] Request text length:', rawText.length);
-        
-        const systemInstruction = `You are an expert document formatter. Your task is to clean and format a raw text document while preserving its original structure and readability.
+    Example Output:
+    <h>ARTICLE 1</h>
+    <p>The trade between the two countries...
+    continues on this line.</p>
+    <li>1. For the purposes of this...</li>
+    <fn>¹ This is a footnote.</fn>`;
 
-CRITICAL FORMATTING RULES:
-
-1. **PRESERVE ORIGINAL STRUCTURE**:
-   - Keep all headings exactly as they appear (SECTION A, CHAPTER 1, Section 1.1, etc.)
-   - Maintain proper spacing between sections (blank lines between major sections)
-   - Preserve numbered lists, bullet points, and paragraph breaks
-   - Keep sub-sections and definitions properly indented
-   - **NEVER merge paragraphs into one continuous block of text**
-
-2. **CLEAN THE TEXT**:
-   - Remove page break markers ('--- END OF PAGE X ---')
-   - Remove duplicate headers/footers that appear on multiple pages
-   - Fix obvious OCR errors while preserving content
-
-3. **HANDLE FOOTNOTES**:
-   - **Detect all potential footnote markers**: This includes superscript numbers (¹), numbers in brackets ([1]), numbers in parentheses ((1)), asterisks (*), and simple numbers following a word (word1, word2).
-   - **Convert ALL footnote references** to the format: {{footnotenumberX}}Y{{-footnotenumberX}}, where X is a sequential counter (1, 2, 3...) and Y is the original marker (e.g., 1, 2, *, a).
-   - **Convert ALL footnote definitions** (usually at the bottom of a page) to the format: {{footnoteX}}Y Footnote text here{{-footnoteX}}.
-   - **Renumber all footnotes sequentially** starting from 1. The X in the tags must be sequential.
-   - Ensure every reference tag {{footnotenumberX}} has a corresponding definition tag {{footnoteX}}.
-
-4. **OUTPUT FORMAT**:
-   - Return clean, readable text that matches the original document structure
-   - Use proper line breaks and spacing
-   - Maintain professional document formatting
-   - Each article, section, and paragraph should be clearly separated`;
-      
-        const safetySettingsConfig = {
-          safetySettings: [
-            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          ],
-        };
-
-        console.log('🔍 [REFORMAT_DEBUG] Making API call to llmService.generateContent with safety settings disabled...');
-        
-        const response = await llmService.generateContent({ 
-          model: getModel(), 
-          contents: rawText, 
-          config: { 
-            systemInstruction, 
-            temperature: 0.2,
-            maxOutputTokens: 8192, // Set a generous token limit for the output
-            ...safetySettingsConfig
-          } 
-        });
-        
-        console.log('🔍 [REFORMAT_DEBUG] API response received');
-        console.log('🔍 [REFORMAT_DEBUG] Response type:', typeof response);
-        console.log('🔍 [REFORMAT_DEBUG] Response keys:', Object.keys(response || {}));
-        console.log('🔍 [REFORMAT_DEBUG] Response.response.text type:', typeof response?.response?.text);
-        console.log('🔍 [REFORMAT_DEBUG] Response.response.text length:', response?.response?.text?.length || 0);
-        console.log('🔍 [REFORMAT_DEBUG] Response.response.text preview (first 300 chars):', response?.response?.text?.substring(0, 300) || 'EMPTY');
-        console.log('🔍 [REFORMAT_DEBUG] Response finishReason:', response?.response?.finishReason);
-        console.log('🔍 [REFORMAT_DEBUG] Response safetyRatings:', response?.response?.safetyRatings);
-        
-        const elapsedTime = Date.now() - startTime;
-        console.log(`✅ [REFORMAT_DEBUG] Final formatting completed in ${elapsedTime}ms. Output length: ${response.response.text?.length || 0}`);
-        
-        const text = response.response.text;
-        if (!text) {
-          console.log('❌ [REFORMAT_DEBUG] API response.response.text is empty or null. Diagnostic info:', {
-            finishReason: response.response.finishReason,
-            safetyRatings: response.response.safetyRatings,
-            candidates: response.response.candidates
-          });
-          throw new Error("API response for reformatting was empty.");
-        }
-        
-        console.log('✅ [REFORMAT_DEBUG] Returning formatted text, length:', text.length);
-        return text;
-      })
-    ]);
-  } catch (error) {
-    console.error("[ERROR] Final formatting failed after retries:", error);
-    // Fallback: return the original text so the user doesn't lose their content.
-    console.log("[INFO] Fallback: Returning original, unformatted text.");
-    return rawText.replace(/--- END OF PAGE \d+ ---/g, '\n');
-  }
-}
-
-/**
- * Reformats a large document by splitting it into chunks and processing each chunk individually.
- * This avoids timeouts and token limits for very large documents.
- * @param rawText The entire raw text of the document.
- * @returns A promise that resolves to the fully reformatted document text.
- */
-async function reformatLargeDocumentInChunks(rawText: string): Promise<string> {
-  console.log(`[INFO] Document is large (${rawText.length} chars). Processing in chunks.`);
-  
-  // Split by the page separator, keeping the separator in the next chunk for context.
-  const chunks = rawText.split(/(?=--- END OF PAGE \d+ ---)/g);
-  const reformattedChunks: string[] = [];
-
-  console.log(`[INFO] Split document into ${chunks.length} chunks.`);
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    if (chunk.trim().length === 0) continue;
-
-    console.log(`[INFO] Formatting chunk ${i + 1}/${chunks.length} (${chunk.length} chars)...`);
-    
-    try {
-      // Use a simpler instruction for chunks, focusing on cleaning, not restructuring.
-      const systemInstruction = `You are an expert document formatter. Your task is to clean and format this text chunk.
-      - Remove page break markers ('--- END OF PAGE X ---').
-      - Fix obvious OCR errors and spacing issues.
-      - Preserve all {{footnote...}} tags and other structural elements exactly as they are.
-      - Return only the cleaned text for this chunk. Do not add extra commentary.`;
-
-      const response = await llmService.generateContent({
-        model: getModel(),
-        contents: chunk,
-        config: {
-          systemInstruction,
-          temperature: 0.1
-        }
-      });
-      
-      reformattedChunks.push(response.response.text || chunk); // Use original chunk as fallback
-    } catch (error) {
-      console.error(`[ERROR] Failed to format chunk ${i + 1}. Using original text for this chunk.`, error);
-      reformattedChunks.push(chunk); // Fallback to the original chunk on error
+    // For large documents, chunking is necessary
+    const CHUNK_SIZE = 30000;
+    if (rawText.length < CHUNK_SIZE) {
+        const { response } = await llmService.generateContent({ model: getModel(), contents: [{ role: 'user', parts: [{ text: systemInstruction }, { text: rawText }] }] });
+        return response.text || rawText;
     }
-  }
-  
-  console.log(`[SUCCESS] All ${chunks.length} chunks have been processed. Reassembling document.`);
-  // Reassemble the document and clean up any remaining page markers.
-  return reformattedChunks.join('\n').replace(/--- END OF PAGE \d+ ---/g, '\n');
+
+    const chunks = [];
+    for (let i = 0; i < rawText.length; i += CHUNK_SIZE) {
+        chunks.push(rawText.slice(i, i + CHUNK_SIZE));
+    }
+    const processedChunks = await Promise.all(chunks.map(async (chunk) => {
+        const { response } = await llmService.generateContent({ model: getModel(), contents: [{ role: 'user', parts: [{ text: systemInstruction }, { text: chunk }] }] });
+        return response.text || chunk;
+    }));
+    return processedChunks.join('\n');
 }

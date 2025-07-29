@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { extractTextFromImage, reformatDocumentText, processPageWithText, findProblematicPages } from '../services/geminiService';
-import type { ExtractionResult } from '../types';
+import { extractTextFromImage, processPageWithText, enrichTextWithStructuralTags } from '../services/geminiService';
+import { processStructuredText } from '../services/textProcessor';
+import type { ExtractionResult, FootnoteAnalysisResult } from '../types';
 import { PageStatus } from '../types';
 import { useStepTimers, StepTimer } from './useStepTimers';
 import { useProcessPersistence } from './useProcessPersistence';
@@ -10,11 +11,6 @@ import { DebugClient } from '../services/debugClient';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.3.93/build/pdf.worker.min.mjs`;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-interface FootnoteAnalysisResult {
-  count: number;
-  pages: number[];
-}
 
 interface PdfProcessState {
   results: ExtractionResult[];
@@ -202,18 +198,20 @@ export const usePdfProcessor = () => {
       const pagesToAnalyze = accumulatedResults.filter(r => r.status !== PageStatus.COMPLETED);
 
       if (!phase2Complete && pagesToAnalyze.length > 0) {
-        stepTimers.startStep("phase2", "Phase 2: AI analyzing document");
-        await appendLog(`🧠 Phase 2: AI analyzing document for extraction errors...`, "info");
-        const textForAnalysis = pagesToAnalyze.map(r => `--- PAGE ${r.pageNumber} ---\n${r.text || ""}`).join("\n\n");
-        const problematicPagesFromAI = await findProblematicPages(textForAnalysis);
+        stepTimers.startStep("phase2", "Phase 2: Analyzing document quality");
+        await appendLog(`🧠 Phase 2: Analyzing document quality...`, "info");
         
+        // Simplified analysis: mark pages that need correction based on text quality
+        const problematicPages: number[] = [];
         accumulatedResults.forEach(r => {
-            if (problematicPagesFromAI.includes(r.pageNumber)) {
-                r.status = PageStatus.CORRECTING;
-            }
+          if (r.text && r.text.length < 50) { // Very short pages might need correction
+            r.status = PageStatus.CORRECTING;
+            problematicPages.push(r.pageNumber);
+          }
         });
+        
         updateState({ results: [...accumulatedResults] });
-        await appendLog(`🎯 Found ${problematicPagesFromAI.length} pages needing correction.`, "info", { pages: problematicPagesFromAI });
+        await appendLog(`🎯 Found ${problematicPages.length} pages potentially needing correction.`, "info", { pages: problematicPages });
         stepTimers.stopStep("phase2");
       }
 
@@ -263,20 +261,27 @@ export const usePdfProcessor = () => {
         stepTimers.stopStep("phase3");
       }
 
-      // Phase 4
+      // Phase 4: Hybrid AI Enrichment + Deterministic Formatting
       if (!state.stepTimers['phase4']?.endTime) {
-        stepTimers.startStep('phase4', 'Phase 4: AI formatting final document');
-        await appendLog('🎨 Phase 4: AI formatting final document...', 'info');
+        stepTimers.startStep('phase4', 'Phase 4: Hybrid AI Enrichment + Deterministic Formatting');
+        await appendLog('🎨 Phase 4, Stage 1: AI enriching text with structural tags...', 'info');
         updateState({ isReformatting: true, error: null });
 
-        const rawTextToReformat = accumulatedResults.map(r => r.text ? `${r.text}\n\n--- PAGE ${r.pageNumber} ---\n\n` : "").join('');
-        if(rawTextToReformat.trim().length === 0) throw new Error("No text to reformat.");
+        // ESTÁGIO 2: A IA analisa e adiciona tags
+        const consolidatedText = accumulatedResults.map(r => r.text || '').join('\n');
+        const taggedText = await enrichTextWithStructuralTags(consolidatedText);
 
-        const finalFormattedText = await reformatDocumentText(rawTextToReformat);
-        const footnoteRegex = /<fn>.*?<\/fn>|{{footnote\d+/g;
-        const finalAnalysis: FootnoteAnalysisResult = { count: finalFormattedText.match(footnoteRegex)?.length || 0, pages: [] };
-        
-        updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
+        await appendLog('🔧 Phase 4, Stage 2: Applying deterministic formatting rules...', 'info');
+        updateState({ progress: { ...state.progress, phase: 'Applying Final Formatting...' } });
+
+        // ESTÁGIO 3: O nosso código lê as tags e formata com precisão
+        const { finalText, footnoteAnalysis } = processStructuredText(taggedText);
+
+        updateState({
+          formattedText: finalText,
+          footnoteAnalysis: footnoteAnalysis,
+        });
+
         await appendLog('🎉 PROCESSING COMPLETE!', 'info');
         stepTimers.stopStep('phase4');
       }
@@ -314,13 +319,16 @@ export const usePdfProcessor = () => {
         await appendLog(`🧠 Phase 2: AI analyzing document for extraction errors...`, 'info');
         await appendLog('⚡ [DEBUG] Linha 275 executada com sucesso!', 'info');
         
-        await appendLog('🔍 [DEBUG] Preparando análise AI - criando textForAnalysis...', 'info');
-        const textForAnalysis = accumulatedResults.map(r => `--- PAGE ${r.pageNumber} ---\n${r.text || ''}`).join('\n\n');
-        await appendLog(`🔍 [DEBUG] textForAnalysis criado - Length: ${textForAnalysis.length}`, 'info');
+        await appendLog('🔍 [DEBUG] Analyzing page quality for correction...', 'info');
         
-        await appendLog('🔍 [DEBUG] Chamando findProblematicPages...', 'info');
-        const pagesToCorrect = await findProblematicPages(textForAnalysis);
-        await appendLog(`🔍 [DEBUG] findProblematicPages retornou: ${JSON.stringify(pagesToCorrect)}`, 'info');
+        // Simplified quality analysis without AI dependency
+        const pagesToCorrect: number[] = [];
+        accumulatedResults.forEach(r => {
+          if (r.text && r.text.length < 100) { // Mark very short pages for correction
+            pagesToCorrect.push(r.pageNumber);
+          }
+        });
+        await appendLog(`🔍 [DEBUG] Quality analysis complete. Pages to correct: ${JSON.stringify(pagesToCorrect)}`, 'info');
         
         accumulatedResults.forEach(r => {
           if (pagesToCorrect.includes(r.pageNumber)) {
@@ -350,69 +358,34 @@ export const usePdfProcessor = () => {
         stepTimers.stopStep('phase3');
       }
 
-      // Phase 4 - Final Formatting
+      // Phase 4: Hybrid AI Enrichment + Deterministic Formatting
       if (!restoredState.stepTimers['phase4']?.endTime && !restoredState.formattedText) {
-        stepTimers.startStep('phase4', 'Phase 4: Final formatting');
+        stepTimers.startStep('phase4', 'Phase 4: Hybrid AI Enrichment + Deterministic Formatting');
         updateState({ 
           isReformatting: true, 
           error: null, 
-          currentStatus: '🔄 Preparing final document formatting...' 
+          currentStatus: '🔄 Phase 4, Stage 1: AI analyzing structure...' 
         });
-        await appendLog(`📝 Phase 4: Formatting final document...`, 'info');
+        await appendLog(`🎨 Phase 4, Stage 1: AI enriching text with structural tags...`, 'info');
         
-        const rawTextToReformat = accumulatedResults.map(r => r.text || '').join('\n\n');
-        
-        // TAREFA 1: DIAGNÓSTICO - Analisar a carga útil (payload)
-        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat length:', rawTextToReformat.length);
-        console.log('🔍 [PHASE4_DEBUG] rawTextToReformat preview (first 500 chars):', rawTextToReformat.substring(0, 500));
-        console.log('🔍 [PHASE4_DEBUG] accumulatedResults count:', accumulatedResults.length);
-        console.log('🔍 [PHASE4_DEBUG] accumulatedResults with text:', accumulatedResults.filter(r => r.text && r.text.length > 0).length);
-        
-        // TAREFA 2: UX FEEDBACK - Estimativa de tempo e status detalhado
-        const estimatedTime = Math.ceil(rawTextToReformat.length / 8000); // ~8000 chars per second
-        updateState({ 
-          currentStatus: `📊 Analyzing ${rawTextToReformat.length} characters (est. ${estimatedTime}s)` 
-        });
-        await appendLog(`📊 Debug: Processando ${rawTextToReformat.length} caracteres de ${accumulatedResults.length} páginas (est. ${estimatedTime}s)`, 'info');
-        
-        if (rawTextToReformat.length < 50) {
-          await appendLog(`⚠️ AVISO: Texto muito curto para reformatação (${rawTextToReformat.length} chars)`, 'warn');
-        }
+        // ESTÁGIO 2: A IA analisa e adiciona tags
+        const consolidatedText = accumulatedResults.map(r => r.text || '').join('\n');
+        const taggedText = await enrichTextWithStructuralTags(consolidatedText);
         
         updateState({ 
-          currentStatus: '🤖 Sending to AI for final formatting...' 
+          currentStatus: '🔧 Phase 4, Stage 2: Applying deterministic formatting...' 
         });
-        await appendLog(`🤖 Enviando para IA para formatação final...`, 'info');
+        await appendLog(`🔧 Phase 4, Stage 2: Applying deterministic formatting rules...`, 'info');
         
-        const finalFormattedText = await reformatDocumentText(rawTextToReformat);
-        
-        // TAREFA 1: DIAGNÓSTICO - Analisar o resultado
-        console.log('🔍 [PHASE4_DEBUG] finalFormattedText length:', finalFormattedText?.length || 0);
-        console.log('🔍 [PHASE4_DEBUG] finalFormattedText preview (first 500 chars):', finalFormattedText?.substring(0, 500) || 'EMPTY');
-        
-        if (!finalFormattedText || finalFormattedText.length === 0) {
-          updateState({ 
-            currentStatus: '❌ Final formatting failed - empty result',
-            error: 'Final formatting returned empty text'
-          });
-          await appendLog(`❌ ERRO: reformatDocumentText retornou texto vazio!`, 'error');
-          throw new Error('Final formatting returned empty text');
-        }
+        // ESTÁGIO 3: O nosso código lê as tags e formata com precisão
+        const { finalText, footnoteAnalysis } = processStructuredText(taggedText);
         
         updateState({ 
-          currentStatus: '✅ Analyzing formatted document...' 
-        });
-        await appendLog(`✅ Formatação recebida com sucesso (${finalFormattedText.length} chars)`, 'info');
-        
-        const footnoteRegex = /<fn>.*?<\/fn>|{{footnote\d+/g;
-        const finalAnalysis: FootnoteAnalysisResult = { count: finalFormattedText.match(footnoteRegex)?.length || 0, pages: [] };
-        
-        updateState({ 
-          formattedText: finalFormattedText, 
-          footnoteAnalysis: finalAnalysis,
+          formattedText: finalText, 
+          footnoteAnalysis: footnoteAnalysis,
           currentStatus: '🎉 Document formatting complete!' 
         });
-        await appendLog(`🎉 PROCESSING COMPLETE! Final text: ${finalFormattedText.length} chars`, 'info');
+        await appendLog(`🎉 PROCESSING COMPLETE! Final text: ${finalText.length} chars`, 'info');
         stepTimers.stopStep('phase4');
       }
 

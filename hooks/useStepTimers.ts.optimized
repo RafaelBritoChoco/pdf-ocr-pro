@@ -1,0 +1,125 @@
+// FILE: src/hooks/useStepTimers.ts - OTIMIZADO PARA FEEDBACK EM TEMPO REAL
+import { useState, useCallback, useRef, useEffect } from 'react';
+
+export interface StepTimer {
+    startTime: number;
+    endTime: number | null;
+    duration: number;
+}
+
+export const useStepTimers = () => {
+    const [timers, setTimers] = useState<Record<string, StepTimer>>({});
+    const [activeStep, setActiveStep] = useState<string | null>(null);
+    const [activeStepElapsed, setActiveStepElapsed] = useState<number>(0);
+    const activeStepRef = useRef<string | null>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Limpar intervalo quando o componente é desmontado
+    useEffect(() => {
+        return () => {
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
+        };
+    }, []);
+
+    // Gerir o cronômetro da etapa ativa
+    useEffect(() => {
+        // Limpar intervalo anterior
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+
+        if (activeStep) {
+            // Resetar tempo decorrido e iniciar novo intervalo
+            setActiveStepElapsed(0);
+            
+            intervalRef.current = setInterval(() => {
+                const timer = timers[activeStep];
+                if (timer && timer.startTime && !timer.endTime) {
+                    const elapsed = Math.floor((Date.now() - timer.startTime) / 1000);
+                    setActiveStepElapsed(elapsed);
+                }
+            }, 1000);
+        } else {
+            setActiveStepElapsed(0);
+        }
+    }, [activeStep, timers]);
+
+    const start = useCallback((stepName: string) => {
+        console.log(`⏱️ [TIMER] Iniciando etapa: ${stepName}`);
+        
+        // Parar etapa anterior se existir
+        if (activeStepRef.current && activeStepRef.current !== stepName) {
+            stop(activeStepRef.current);
+        }
+        
+        activeStepRef.current = stepName;
+        setActiveStep(stepName);
+        
+        setTimers(prev => ({
+            ...prev,
+            [stepName]: { startTime: Date.now(), endTime: null, duration: 0 },
+        }));
+    }, []);
+
+    const stop = useCallback((stepName: string) => {
+        console.log(`⏹️ [TIMER] Parando etapa: ${stepName}`);
+        
+        if (activeStepRef.current === stepName) {
+            activeStepRef.current = null;
+            setActiveStep(null);
+        }
+        
+        setTimers(prev => {
+            const step = prev[stepName];
+            if (!step || step.endTime) return prev;
+            const endTime = Date.now();
+            const duration = endTime - step.startTime;
+            
+            console.log(`✅ [TIMER] Etapa ${stepName} concluída em ${Math.floor(duration / 1000)}s`);
+            
+            return {
+                ...prev,
+                [stepName]: { ...step, endTime, duration },
+            };
+        });
+    }, []);
+    
+    const getDuration = useCallback((stepName: string): number => {
+        return timers[stepName]?.duration || 0;
+    }, [timers]);
+
+    const reset = useCallback(() => {
+        console.log('🔄 [TIMER] Resetando todos os timers');
+        
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+        
+        setTimers({});
+        setActiveStep(null);
+        setActiveStepElapsed(0);
+        activeStepRef.current = null;
+    }, []);
+
+    // Função utilitária para formatar tempo em mm:ss
+    const formatTime = useCallback((seconds: number): string => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }, []);
+
+    return { 
+        start, 
+        stop, 
+        getDuration, 
+        reset, 
+        timers,
+        activeStep,
+        activeStepElapsed,
+        formatTime
+    };
+};
