@@ -167,8 +167,6 @@ export const usePdfProcessor = () => {
           if (!context) throw new Error("Could not get canvas context");
           canvas.height = viewport.height;
           canvas.width = viewport.width;
-          
-          // A LINHA CRÍTICA QUE ESTAVA EM FALTA:
           const textContent = await page.getTextContent();
           const rawPageText = textContent.items.map((item: any) => item.str).join(" ").trim();
 
