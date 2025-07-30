@@ -1,13 +1,13 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { enrichTextWithStructuralTags, extractTextFromImage, processPageWithText, findProblematicPages } from '../services/geminiService';
-import { postProcessFinalText } from '../services/textProcessor'; // Import new textProcessor
+import { enrichTextWithStructuralTags, extractTextFromImage, processPageWithText } from '../services/geminiService';
+import type { processStructuredText } from '../services/textProcessor'; // Import new textProcessor
 import type { ExtractionResult } from '../types';
 import { PageStatus } from '../types';
 import { useStepTimers, StepTimer } from './useStepTimers';
 import { useProcessPersistence } from './useProcessPersistence';
-import { DebugClient } => '../services/debugClient';
+import { DebugClient } from '../services/debugClient';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.3.93/build/pdf.worker.min.mjs`;
 
@@ -196,94 +196,29 @@ export const usePdfProcessor = () => {
         stepTimers.stopStep('phase1');
       }
 
-      // Phase 2
-      const phase2Complete = state.stepTimers["phase2"]?.endTime;
-      await appendLog(`🔧 Phase 2 check: phase2Complete=${!!phase2Complete}`, "info");
-      
-      // Only analyze pages that are not yet completed by native extraction
-      const pagesToAnalyze = accumulatedResults.filter(r => r.status !== PageStatus.COMPLETED);
 
-      if (!phase2Complete && pagesToAnalyze.length > 0) {
-        stepTimers.startStep("phase2", "Phase 2: AI analyzing document");
-        await appendLog(`🧠 Phase 2: AI analyzing document for extraction errors...`, "info");
-        const textForAnalysis = pagesToAnalyze.map(r => `--- PAGE ${r.pageNumber} ---\n${r.text || ""}`).join("\n\n");
-        const problematicPagesFromAI = await findProblematicPages(textForAnalysis);
-        
-        accumulatedResults.forEach(r => {
-            if (problematicPagesFromAI.includes(r.pageNumber)) {
-                r.status = PageStatus.CORRECTING;
-            }
+
+
+
+// Phase 4: Hybrid AI Enrichment + Deterministic Formatting
+      if (!state.stepTimers["phase4"]?.endTime) {
+        stepTimers.startStep("phase4", "Phase 4: Hybrid AI Enrichment + Deterministic Formatting");
+        await appendLog(`Phase 4, Stage 2: AI enriching text with structural tags...`);
+        updateState({ isReformatting: true, progress: { ...state.progress, phase: "AI Analyzing Structure..." } });
+        const consolidatedText = accumulatedResults.map(r => r.text || "").join("\n");
+        const taggedText = await enrichTextWithStructuralTags(consolidatedText);
+
+        await appendLog(`Phase 4, Stage 3: Applying deterministic formatting rules...`);
+        updateState({ progress: { ...state.progress, phase: "Applying Final Formatting..." } });
+        const { finalText, footnoteAnalysis } = processStructuredText(taggedText);
+
+        updateState({
+            formattedText: finalText,
+            footnoteAnalysis: footnoteAnalysis,
         });
-        updateState({ results: [...accumulatedResults] });
-        await appendLog(`🎯 Found ${problematicPagesFromAI.length} pages needing correction.`, "info", { pages: problematicPagesFromAI });
-        stepTimers.stopStep("phase2");
-      }
 
-      // Phase 3
-      const pagesForCorrection = accumulatedResults.filter(r => r.status === PageStatus.CORRECTING);
-      if (pagesForCorrection.length > 0 && !state.stepTimers["phase3"]?.endTime) {
-        stepTimers.startStep("phase3", `Phase 3: AI correction (${pagesForCorrection.length} pages)`);
-        await appendLog(`⚡ Phase 3: Starting AI correction for ${pagesForCorrection.length} pages...`, "info");
-        
-        for (const pageToCorrect of pagesForCorrection) {
-            const pageIndex = pageToCorrect.pageNumber - 1;
-            
-            await appendLog(`🤖 Correcting page ${pageToCorrect.pageNumber}...`, "debug");
-            const { text: rawText, imageUrl } = pageToCorrect;
-            
-            let resultText: string | null = null;
-            let changesSummary: string | null = null;
-
-            if (imageUrl) {
-                // If an image URL exists, it means native extraction was insufficient, so perform AI OCR or correction
-                const base64Image = imageUrl.split(",")[1];
-                const result = (rawText && rawText.length > 50)
-                    ? await processPageWithText(rawText, base64Image)
-                    : await extractTextFromImage(base64Image);
-                resultText = result.text;
-                changesSummary = result.changes;
-            } else {
-                // If no image URL, it means native extraction was done, but AI analysis marked it for correction.
-                // In this case, we re-process the raw text using AI to fix issues.
-                // This scenario might need a different AI call or a more robust text-only correction.
-                // For now, we'll assume processPageWithText can handle it even without an image, or we just use the rawText.
-                // A more advanced solution might involve re-rendering the page to get an image if needed.
-                resultText = rawText; // Keep original text if no image for OCR
-                changesSummary = "No image for AI OCR, relying on text analysis.";
-            }
-
-            accumulatedResults[pageIndex] = { 
-                ...accumulatedResults[pageIndex], 
-                text: resultText, 
-                status: PageStatus.COMPLETED, 
-                changes: changesSummary, 
-                method: (imageUrl && rawText && rawText.length > 50) ? 'AI Correction' : (imageUrl ? 'AI OCR' : 'Quick Text') 
-            };
-            updateState({ results: [...accumulatedResults] });
-        }
-        await appendLog(`🎉 Phase 3 completed`, 'info');
-        stepTimers.stopStep("phase3");
-      }
-
-      // Phase 4 - AI Enrichment and Final Formatting
-      if (!state.stepTimers['phase4']?.endTime) {
-        stepTimers.startStep('phase4', 'Phase 4: AI Enrichment and Final Formatting');
-        await appendLog('🎨 Phase 4: AI enriching text with structural tags...', 'info');
-        updateState({ isReformatting: true, error: null });
-
-        const rawTextToEnrich = accumulatedResults.map(r => r.text ? `${r.text}\n\n--- PAGE ${r.pageNumber} ---\n\n` : "").join('');
-        if(rawTextToEnrich.trim().length === 0) throw new Error("No text to enrich.");
-
-        // Call the new AI enrichment function
-        const enrichedText = await enrichTextWithStructuralTags(rawTextToEnrich);
-        await appendLog('✅ AI enrichment completed. Now applying rule-based formatting...', 'info');
-
-        // Pass the enriched text to the new textProcessor
-        const { formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis } = postProcessFinalText(enrichedText);
-        
-        updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
-        await appendLog('🎉 PROCESSING COMPLETE!', 'info');
-        stepTimers.stopStep('phase4');
+        stepTimers.stopStep("phase4");
+        await appendLog(`Phase 4 completed in ${stepTimers.getDuration("phase4")}ms`);
       }
 
     } catch (e: any) {
@@ -369,7 +304,7 @@ export const usePdfProcessor = () => {
         await appendLog('✅ AI enrichment completed. Now applying rule-based formatting...', 'info');
 
         // Pass the enriched text to the new textProcessor
-        const { formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis } = postProcessFinalText(enrichedText);
+        const { finalText: finalFormattedText, footnoteAnalysis: finalAnalysis } = processStructuredText(enrichedText);
         
         updateState({ formattedText: finalFormattedText, footnoteAnalysis: finalAnalysis });
         await appendLog('🎉 PROCESSING COMPLETE!', 'info');
