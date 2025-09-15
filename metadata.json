@@ -1,0 +1,5 @@
+{
+  "name": " PDF OCR v2.4 - Simplified Robust Edition Canta vento",
+  "description": "A local, privacy-first PDF text extraction tool powered by AI summarization. It features a clean, user-friendly interface, robust processing with detailed feedback, and allows users to extract text and generate summaries from PDF files up to 200MB.",
+  "requestFramePermissions": []
+}
