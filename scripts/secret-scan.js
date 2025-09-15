@@ -20,6 +20,10 @@ const PATTERNS = [
 ];
 
 let issues = [];
+let oversize = [];
+
+// Optional size limit (bytes) via env: SCAN_MAX_SIZE=200000 or default 500k
+const MAX_SIZE = parseInt(process.env.SCAN_MAX_SIZE || '512000', 10);
 
 function scanFile(p){
   let content;
@@ -45,12 +49,21 @@ function walk(dir){
       const ext = extname(e).toLowerCase();
       if(EXTS_SKIP.has(ext)) continue;
       if(ext === '.env' || e.startsWith('.env')) continue; // env files ignored
+      if(st.size > MAX_SIZE) {
+        oversize.push({ file: rel, size: st.size });
+        continue; // skip scanning huge files
+      }
       scanFile(full);
     } catch { /* ignore */ }
   }
 }
 
 walk(ROOT);
+
+if(oversize.length){
+  console.warn(`\n[SECRET-SCAN] Arquivos grandes ignorados (> ${MAX_SIZE} bytes):`);
+  oversize.forEach(o => console.warn(`- ${o.file} (${o.size} bytes)`));
+}
 
 if(issues.length){
   console.error('\n[SECRET-SCAN] POSSÍVEIS VAZAMENTOS ENCONTRADOS:');

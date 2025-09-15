@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-commit sample hook (copy to .git/hooks/pre-commit and chmod +x) 
+# 1. Run secret scan
+# 2. Block large PDFs (>2MB) from being committed accidentally
+
+# Abort on error
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+echo -e "${YELLOW}[pre-commit] Executando verificação de segredos...${NC}" 
+node scripts/secret-scan.js || { 
+  echo -e "${RED}[pre-commit] Bloqueado por possíveis segredos.${NC}"; 
+  exit 1; 
+}
+
+# Check for large PDF additions
+MAX=2000000 # 2MB
+large=$(git diff --cached --name-only --diff-filter=ACM | grep -i '\.pdf$' || true)
+if [ -n "$large" ]; then
+  for f in $large; do
+    if [ -f "$f" ]; then
+      size=$(wc -c <"$f")
+      if [ "$size" -gt "$MAX" ]; then
+        echo -e "${RED}[pre-commit] PDF grande detectado (>2MB): $f (${size} bytes). Use samples-local/ ou reduza o tamanho.${NC}" 
+        exit 1
+      fi
+    fi
+  done
+fi
+
+echo -e "${GREEN}[pre-commit] OK${NC}"
