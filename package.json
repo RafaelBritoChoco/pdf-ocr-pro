@@ -1,12 +1,13 @@
 {
-  "name": "pdf-ocr-v2.4---simplified-robust-edition-canta-vento",
-  "private": true,
-  "version": "0.0.0",
+  "name": "pdf-ocr-2.4",
+  "private": false,
+  "version": "2.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "scan:secrets": "node scripts/secret-scan.js"
   },
   "dependencies": {
     "react": "^19.1.1",
@@ -19,5 +20,12 @@
     "@types/node": "^22.14.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RafaelBritoChoco/pdf-ocr-pro.git"
+  },
+  "license": "MIT",
+  "keywords": ["pdf", "ocr", "gemini", "openrouter", "ia", "estruturação", "extracao"],
+  "engines": {"node": ">=18"}
 }

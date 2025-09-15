@@ -2,11 +2,9 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# PDF OCR 2.4 – Extração + Estruturação Inteligente
 
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/drive/1ucvV0KRGmBvZvLLpi7EDAZ_vUWuuzNqa
+Pipeline local de extração de texto de PDFs com opção de OCR resiliente e múltiplas etapas de estruturação assistida por IA (limpeza, detecção de títulos, notas de rodapé e marcação de conteúdo). Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
 
 ## Run Locally
 
@@ -35,3 +33,32 @@ Por padrão o app usa Gemini. OpenRouter reutiliza as mesmas instruções-base e
 ### Segurança
 
 Se uma chave for exposta, gere uma nova imediatamente e remova a antiga. Utilize permissões mínimas necessárias.
+
+### Scanner de Segredos
+
+Execute antes de commitar para garantir que nenhuma chave vazou:
+
+```bash
+npm run scan:secrets
+```
+
+Saída com código diferente de 0 indica possíveis padrões suspeitos. Revise antes do commit.
+
+### Hook Pré-Commit (Opcional)
+
+Crie `.git/hooks/pre-commit` (sem extensão) com:
+
+```bash
+#!/bin/sh
+node scripts/secret-scan.js || {
+   echo "\n[pre-commit] Bloqueado por possíveis segredos."; exit 1;
+}
+```
+
+Depois dê permissão de execução (Linux/macOS): `chmod +x .git/hooks/pre-commit`.
+
+No Windows (Git Bash) funciona igual; em PowerShell pode usar Git Bash para instalar.
+
+### Licença
+
+MIT. Veja `LICENSE` (adicionar se necessário).

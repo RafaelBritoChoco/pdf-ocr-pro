@@ -46,6 +46,24 @@ const MAX_CHUNK_ATTEMPTS = 3; // Max retries for a failed chunk
 // Flag para simplificar OpenRouter e deixá-lo igual ao fluxo Gemini (sem pré-processamentos agressivos)
 const OPENROUTER_SIMPLIFIED = true;
 
+// Função central para adaptar instruções base (Gemini) para OpenRouter sem espalhar ifs
+function buildProviderInstruction(base: string, provider: Provider, context: 'cleaning'|'headlines'|'content'|'footnotes_markers'): string {
+  if (provider !== 'openrouter') return base;
+  // Complementos específicos para robustez do modelo OpenRouter escolhido
+  let extra = '';
+  switch (context) {
+    case 'cleaning':
+      extra = `OPENROUTER ADAPTATION:\n- Baseado na instrução Gemini.\n- NÃO mover números de referência no fim de linha para a próxima.\n- Não inventar conteúdo; apenas limpar ruído óbvio.\n- Evitar remover números isolados que possam ser marcadores.`; break;
+    case 'headlines':
+      extra = `OPENROUTER ADAPTATION:\n- Envolver apenas títulos reais com {{levelX}}...{{-levelX}}.\n- NÃO duplicar a linha.\n- NÃO mover números de nota.\n- Marcar padrões fortes: CHAPTER / SECTION / CAP[IÍ]TULO / ARTIGO / Art. N / Article N.`; break;
+    case 'content':
+      extra = `OPENROUTER ADAPTATION:\n- Não alterar linhas já taggeadas como headline.\n- Não mover números de fim de linha.\n- Somente aplicar marcações de conteúdo solicitadas.`; break;
+    case 'footnotes_markers':
+      extra = `OPENROUTER ADAPTATION:\n- Marcar apenas referências e conteúdo das notas.\n- Não alterar outras linhas ou mover números.`; break;
+  }
+  return base + '\n\n' + extra;
+}
+
 // Heurística simples única (mantemos só esta versão enxuta)
 function restoreTrailingReferenceNumber(originalChunk: string, processedChunk: string): string {
   const origLines = originalChunk.split(/\r?\n/);
@@ -232,9 +250,7 @@ export default function App() {
         let success = false;
         for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt++) {
           setStructuringMessage(`Limpando pedaço ${i + 1} de ${chunks.length} (Tentativa ${attempt})...`);
-          const instructions = (provider === 'openrouter' && OPENROUTER_SIMPLIFIED)
-            ? getTaskInstructionsForCleaning() + '\n\nPRESERVE NUMERIC REFERENCES: Não mova números no fim de linha para a próxima linha.'
-            : getTaskInstructionsForCleaning();
+          const instructions = buildProviderInstruction(getTaskInstructionsForCleaning(), provider, 'cleaning');
           const result = await processDocumentChunkUnified({
             main_chunk_content: chunks[i],
             continuous_context_summary: "Cleaning document text. No structural context needed.",
@@ -311,10 +327,7 @@ export default function App() {
         let processedChunk = '';
         for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt++) {
           setStructuringMessage(`Etapa 1: Marcando headlines no pedaço ${i + 1} de ${chunks.length} (Tentativa ${attempt})...`);
-          let step1Instructions = getTaskInstructionsForStep1_Headlines();
-          if (provider === 'openrouter' && OPENROUTER_SIMPLIFIED) {
-            step1Instructions += '\n\nOPENROUTER SIMPLE MODE: Não mover números de footnote; não duplicar linhas; apenas envolver cabeçalhos claros.';
-          }
+          let step1Instructions = buildProviderInstruction(getTaskInstructionsForStep1_Headlines(), provider, 'headlines');
           const result = await processDocumentChunkUnified({
             main_chunk_content: chunks[i],
             continuous_context_summary: "Currently tagging headlines.",
@@ -335,7 +348,7 @@ export default function App() {
               const headlinePattern = /(\bCHAPTER\b|\bARTICLE\b|\bSECTION\b|\bCAP[IÍ]TULO\b|\bARTIGO\b|^Art\.\s*\d|^Article\s+\d)/m;
               if (!hasHeadlineTags && headlinePattern.test(chunks[i])) {
                 console.warn(`[OpenRouter][Reinforcement] Chunk ${i+1} sem tags apesar de padrão. Executando reforço.`);
-                const reinforcedInstructions = step1Instructions + '\n\nREFORÇO CRÍTICO: Você deve OBRIGATORIAMENTE envolver títulos detectáveis (CHAPTER / ARTICLE / SECTION / CAPÍTULO / ARTIGO / Art. N) com {{levelX}} mantendo o texto idêntico. NÃO devolver bloco cru se houver padrão.';
+                const reinforcedInstructions = buildProviderInstruction(step1Instructions + '\n\nREFORÇO CRÍTICO: Você deve OBRIGATORIAMENTE envolver títulos detectáveis (CHAPTER / ARTICLE / SECTION / CAPÍTULO / ARTIGO / Art. N) com {{levelX}} mantendo o texto idêntico. NÃO devolver bloco cru se houver padrão.', provider, 'headlines');
                 const retry = await processDocumentChunkUnified({
                   main_chunk_content: chunks[i],
                   continuous_context_summary: 'Reinforcement pass due to missing headline tags.',
@@ -416,7 +429,7 @@ export default function App() {
             continuous_context_summary: 'Tagging footnote references and footnote content lines only.',
             previous_chunk_overlap: i > 0 ? chunks[i-1].slice(-OVERLAP_CONTEXT_SIZE) : '',
             next_chunk_overlap: i < chunks.length - 1 ? chunks[i+1].slice(0, OVERLAP_CONTEXT_SIZE) : '',
-            task_instructions: getTaskInstructionsForFootnotesMarkers(),
+            task_instructions: buildProviderInstruction(getTaskInstructionsForFootnotesMarkers(), provider, 'footnotes_markers'),
             onApiCall: incrementApiCalls,
             mode: processingMode,
             provider,
@@ -471,10 +484,7 @@ export default function App() {
             let processedChunk = '';
             for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt++) {
                 setStructuringMessage(`Etapa 2: Marcando conteúdo no pedaço ${i + 1} de ${chunks.length} (Tentativa ${attempt})...`);
-                let step2Instructions = getTaskInstructionsForStep2_Content();
-                if (provider === 'openrouter' && OPENROUTER_SIMPLIFIED) {
-                  step2Instructions += '\n\nOPENROUTER SIMPLE MODE: Não mover números de fim de linha; não alterar linhas já taggeadas; não envolver footnotes.';
-                }
+                let step2Instructions = buildProviderInstruction(getTaskInstructionsForStep2_Content(), provider, 'content');
                 const result = await processDocumentChunkUnified({
                     main_chunk_content: chunks[i],
                     continuous_context_summary,
@@ -810,7 +820,10 @@ export default function App() {
         </main>
         <footer className="text-center mt-10 text-sm text-gray-600">
             <p>All processing is local; no data is sent to external servers for extraction.</p>
-            <p>AI text structuring uses the Gemini API.</p>
+            <p>
+              {provider === 'gemini' && 'AI text structuring uses the Gemini API.'}
+              {provider === 'openrouter' && `AI text structuring via OpenRouter (${qwenModel}) com instruções base Gemini adaptadas.`}
+            </p>
         </footer>
     </div>
   );
