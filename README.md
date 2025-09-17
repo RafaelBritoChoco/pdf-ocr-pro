@@ -338,6 +338,23 @@ python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008
 - Porta 8008 não sobe: veja `scripts/logs/*.err.log` e rode novamente `scripts/run-docling-detached.ps1` (o script já espera ~30s pelo readiness).
 - Front acusa “Docling Offline”: garanta o endpoint via Console (código acima) e acesse `http://127.0.0.1:8008/health`.
 
+#### Por que meu servidor para depois de um tempo sem usar?
+
+Possíveis causas e como mitigar:
+
+- Janela/terminal encerrado: se a janela do Vite (npm run dev) for fechada, o servidor cai. Deixe a janela aberta ou rode o `start-all.bat` que cria janelas separadas.
+- Sleep/hibernação ou logoff: processos de usuário são finalizados ao sair da sessão; o sleep pode interromper redes/handles. Evite logoff, ajuste energia para não hibernar durante o uso ou use o watchdog abaixo.
+- Queda do Docling por exceção: verifique o último `scripts/logs/*.err.log`. Se houver crash esporádico, o watchdog reinicia automaticamente.
+- Porta em uso após retomada: se 8008 foi tomada por outro processo, pare e reinicie (`scripts/stop-docling.ps1` e depois `scripts/run-docling-detached.ps1`).
+
+Watchdog (reinício automático do Docling):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docling-watchdog.ps1 -VenvPath C:\docling-venv -IntervalSeconds 60
+```
+
+O watchdog verifica periodicamente `http://127.0.0.1:8008/health` e, se falhar, roda novamente `run-docling-detached.ps1`.
+
 ## Dica/Diagnóstico no Windows: caminhos com acentos
 
 Se o caminho do repositório tiver caracteres não ASCII (por exemplo, "verção"), algumas bibliotecas nativas usadas pelo Docling (pacote `docling_parse`) podem falhar ao localizar arquivos de recursos internos e produzir erros como:
