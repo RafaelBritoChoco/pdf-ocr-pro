@@ -62,6 +62,9 @@ __local__/
 ### Generated Reports
 report-*.json
 
+# Runtime PID files
+.docling.pid
+
 #
 # Python (local tooling)
 #

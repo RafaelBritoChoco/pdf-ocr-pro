@@ -8,15 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "scan:secrets": "node scripts/secret-scan.js",
-    "test": "tsx tests/extractPdfToTxt.ts",
     "start:all": "cmd /c scripts\\start-all.bat",
     "docling:up": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\run-docling-detached.ps1\" -BindHost 127.0.0.1 -BindPort 8008",
     "docling:down": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\stop-docling.ps1\"",
-    "demo:openrouter:llama70b": "tsx tests/nodeOpenRouterLlama70B.ts",
-    "validate:openrouter": "tsx tests/validateOpenRouterKey.ts",
-    "demo:openrouter:pdf": "tsx tests/processPdfWithOpenRouter.ts",
-    "extract:pdf": "tsx tests/extractPdfToTxt.ts",
-    "demo:docling": "tsx tests/doclingDemo.ts"
+    "docling:watch": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\docling-watchdog.ps1\" -VenvPath C:\\docling-venv -IntervalSeconds 60"
   },
   "dependencies": {
     "react": "^19.1.1",
