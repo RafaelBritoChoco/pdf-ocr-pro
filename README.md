@@ -6,11 +6,30 @@
 
 Pipeline local de extração de texto de PDFs com opção de OCR resiliente e múltiplas etapas de estruturação assistida por IA (limpeza, detecção de títulos, notas de rodapé e marcação de conteúdo). Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
 
+## ✨ Dual-Mode Interface
+
+A aplicação oferece duas interfaces principais:
+
+### 🔧 **OCR App Mode**
+- Interface principal para processamento de PDFs
+- Upload via drag & drop ou seleção de arquivo
+- Processamento em etapas com feedback em tempo real
+- Visualização de resultados formatados
+- Logs de debug para troubleshooting
+
+### 🧪 **LLM API Tester**
+- Interface para testar APIs de LLM diretamente
+- Suporte a múltiplos modelos Gemini
+- Configuração de parâmetros personalizados
+- Teste rápido de prompts e configurações
+
+Navegue entre os modos usando os botões no topo da interface.
+
 ## Run Locally
 
 **Prerequisites:**  Node.js
 
-
+### Frontend Only (UI Mode)
 1. Install dependencies:
    `npm install`
 2. Copie `.env.example` para `.env.local` e preencha as chaves (NÃO comite `.env.local`):
@@ -19,6 +38,18 @@ Pipeline local de extração de texto de PDFs com opção de OCR resiliente e m�
    - (Opcional) Model overrides: `GEMINI_MODEL=` / `OPENROUTER_MODEL=`
 3. Execute localmente:
    `npm run dev`
+
+### Full Stack Mode (Frontend + Backend)
+1. Complete steps 1-2 above
+2. Execute com servidor backend:
+   `npm run dev:full`
+   
+   This starts both:
+   - Frontend: http://localhost:5173
+   - Backend API: http://localhost:3001
+
+### Development Mode
+Para desenvolvimento sem chaves API, a aplicação roda em modo mock com funcionalidade simulada.
 
 ### Variáveis de Ambiente
 
