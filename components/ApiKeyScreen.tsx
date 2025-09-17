@@ -1,18 +1,36 @@
 import React, { useState, useEffect } from 'react';
 
 interface ApiKeyScreenProps {
-  onSave: (data: { provider: string; geminiKey: string; openRouterKey: string; qwenModel: string; }) => void;
+  onSave: (data: { provider: string; geminiKey: string; openRouterKey: string; openRouterModel: string; }) => void;
 }
 
-const DEFAULT_QWEN_MODEL = 'qwen/qwen-2.5-7b-instruct';
+// Modelo padrão antigo (Qwen) e opções adicionais incluindo Llama 3
+const DEFAULT_OPENROUTER_MODEL = 'qwen/qwen-2.5-7b-instruct';
+const OPENROUTER_MODEL_OPTIONS = [
+  { value: 'meta-llama/llama-3-8b-instruct', label: 'Llama 3 8B Instruct' },
+  { value: 'meta-llama/llama-3-70b-instruct', label: 'Llama 3 70B Instruct' },
+  { value: 'meta-llama/llama-3.1-8b-instruct', label: 'Llama 3.1 8B Instruct' },
+  { value: 'meta-llama/llama-3.1-70b-instruct', label: 'Llama 3.1 70B Instruct' },
+  { value: 'qwen/qwen-2.5-7b-instruct', label: 'Qwen 2.5 7B Instruct (padrão anterior)' },
+  { value: 'qwen/qwen-2.5-14b-instruct', label: 'Qwen 2.5 14B Instruct' },
+];
 
 export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSave }) => {
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [openRouterKey, setOpenRouterKey] = useState(() => localStorage.getItem('openrouter_api_key') || '');
   const [provider, setProvider] = useState<string>(() => localStorage.getItem('ai_provider') || (geminiKey ? 'gemini' : 'openrouter'));
   const [show, setShow] = useState<{ gemini: boolean; open: boolean }>({ gemini: false, open: false });
-  const [qwenModel, setQwenModel] = useState(() => localStorage.getItem('qwen_model') || DEFAULT_QWEN_MODEL);
+  // Migração: se existir qwen_model e não openrouter_model, usar o antigo
+  const legacyQwen = typeof window !== 'undefined' ? localStorage.getItem('qwen_model') : null;
+  const initialModel = () => {
+    const stored = (typeof window !== 'undefined' && (localStorage.getItem('openrouter_model') || '')) || '';
+    if (stored) return stored;
+    if (legacyQwen) return legacyQwen; // migra automaticamente
+    return DEFAULT_OPENROUTER_MODEL;
+  };
+  const [openRouterModel, setOpenRouterModel] = useState(initialModel);
   const [error, setError] = useState<string | null>(null);
+  const [doclingEndpoint, setDoclingEndpoint] = useState<string>(() => localStorage.getItem('docling_endpoint') || 'http://127.0.0.1:8008');
 
   useEffect(() => {
     if (geminiKey.trim()) localStorage.setItem('gemini_api_key', geminiKey.trim());
@@ -21,7 +39,16 @@ export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSave }) => {
     if (openRouterKey.trim()) localStorage.setItem('openrouter_api_key', openRouterKey.trim());
   }, [openRouterKey]);
   useEffect(() => { localStorage.setItem('ai_provider', provider); }, [provider]);
-  useEffect(() => { localStorage.setItem('qwen_model', qwenModel); }, [qwenModel]);
+  useEffect(() => { localStorage.setItem('openrouter_model', openRouterModel); }, [openRouterModel]);
+  useEffect(() => { if (doclingEndpoint) localStorage.setItem('docling_endpoint', doclingEndpoint); }, [doclingEndpoint]);
+  // Migração forward: se legacy existir e ainda não migramos, persiste no novo key
+  useEffect(() => {
+    try {
+      if (legacyQwen && !localStorage.getItem('openrouter_model')) {
+        localStorage.setItem('openrouter_model', legacyQwen);
+      }
+    } catch {}
+  }, [legacyQwen]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +61,7 @@ export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSave }) => {
       return;
     }
     setError(null);
-    onSave({ provider, geminiKey: geminiKey.trim(), openRouterKey: openRouterKey.trim(), qwenModel });
+  onSave({ provider, geminiKey: geminiKey.trim(), openRouterKey: openRouterKey.trim(), openRouterModel });
   };
 
   const handleClear = () => {
@@ -59,7 +86,7 @@ export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSave }) => {
               <input type="radio" name="provider" value="gemini" checked={provider==='gemini'} onChange={() => setProvider('gemini')} /> Gemini
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-300">
-              <input type="radio" name="provider" value="openrouter" checked={provider==='openrouter'} onChange={() => setProvider('openrouter')} /> OpenRouter (Qwen)
+              <input type="radio" name="provider" value="openrouter" checked={provider==='openrouter'} onChange={() => setProvider('openrouter')} /> OpenRouter
             </label>
           </div>
         </div>
@@ -95,14 +122,34 @@ export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSave }) => {
           </div>
           {provider === 'openrouter' && (
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Modelo Qwen (OpenRouter)</label>
-              <input
-                type="text"
-                value={qwenModel}
-                onChange={(e) => setQwenModel(e.target.value)}
+              <label className="block text-sm font-medium text-gray-300 mb-1">Modelo OpenRouter</label>
+              <select
+                value={openRouterModel}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/:free$/,'');
+                  setOpenRouterModel(v);
+                }}
                 className="w-full px-4 py-2 rounded-md bg-gray-900 border border-gray-700 text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
-              />
-              <p className="text-xs text-gray-500 mt-1">Exemplo: qwen/qwen-2.5-7b-instruct (padrão). Pode usar outro modelo disponível na OpenRouter.</p>
+              >
+                {OPENROUTER_MODEL_OPTIONS.map(m => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+                {!OPENROUTER_MODEL_OPTIONS.find(o => o.value === openRouterModel) && (
+                  <option value={openRouterModel}>{openRouterModel} (custom)</option>
+                )}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Selecione Llama 3.x ou Qwen. Se um modelo retornar 404, escolha outro (sua conta pode não ter acesso). Pode colar identificador custom.</p>
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-300 mb-1">Endpoint Docling (opcional)</label>
+                <input
+                  type="text"
+                  value={doclingEndpoint}
+                  onChange={(e) => setDoclingEndpoint(e.target.value)}
+                  placeholder="http://127.0.0.1:8008"
+                  className="w-full px-4 py-2 rounded-md bg-gray-900 border border-gray-700 text-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-xs"
+                />
+                <p className="text-[11px] text-gray-500 mt-1">Se definido e o serviço estiver online, a extração inicial usará Docling (FAST → simple, QUALITY → advanced). Se estiver offline, o fluxo com OpenRouter não iniciará até o serviço estar online.</p>
+              </div>
             </div>
           )}
         </div>

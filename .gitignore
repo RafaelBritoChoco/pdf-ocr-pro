@@ -61,3 +61,22 @@ __local__/
 
 ### Generated Reports
 report-*.json
+
+#
+# Python (local tooling)
+#
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+
+#
+# Stray or legacy folders (keep repo lean)
+#
+pdf-ocr-pro2.4/

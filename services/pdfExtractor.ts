@@ -46,18 +46,72 @@ export const extractTextFromFile = async (
   // Iterate through each page and extract text
   for (let i = 1; i <= numPages; i++) {
     const page = await pdfDocument.getPage(i);
-    const textContent = await page.getTextContent();
-    
-    // Join the text items on the page
-    const pageText = textContent.items.map(item => {
-      // The item can be a TextItem object which has a 'str' property.
-      // We need a type guard here to make TypeScript happy.
-      if ('str' in item) {
-        return item.str;
+    const textContent = await page.getTextContent({ normalizeWhitespace: false } as any);
+
+    // Position-aware reconstruction: build lines and words based on item x/y and spacing.
+    // This greatly reduces spurious spaces that break inline numbers (e.g., Article 12.1) or footnote markers.
+    interface TextItemLike { str: string; transform: number[]; width?: number; height?: number; }
+    const items = textContent.items.filter((it: any) => 'str' in it) as TextItemLike[];
+
+    let lines: string[] = [];
+    let current = '';
+    let lastX = 0, lastY = 0, lastW = 0;
+    const lineYTol = 2.5; // y change considered a new line
+    const minSpaceGap = 0.25; // fraction of lastW to consider as a space
+    const superscripts = /[⁰ⁱ¹²³⁴⁵⁶⁷⁸⁹]/;
+    const isPageNumberLine = (line: string): boolean => {
+      const t = (line || '').trim();
+      if (!t) return false;
+      if (/^(Página|Page)\s+\d{1,4}(?:\s+(?:of|de)\s+\d{1,4})?$/i.test(t)) return true;
+      if (/^\d{1,4}$/.test(t)) return true;
+      return false;
+    };
+
+    const shouldSpace = (prevChar: string, nextStr: string, gap: number, lastWidth: number) => {
+      if (!nextStr) return false;
+      const nextChar = nextStr[0];
+      // Never add space before superscript digits; keep them glued to the word.
+      if (superscripts.test(nextChar)) return false;
+      // No space before closing punctuation or dot-number pattern
+      if (/^[\.,;:\)\]\}\!\?]/.test(nextChar)) return false;
+      // Require a significant gap to insert space
+      return gap > Math.max(1, lastWidth * minSpaceGap);
+    };
+
+    for (const it of items) {
+      const x = it.transform?.[4] ?? lastX;
+      const y = it.transform?.[5] ?? lastY;
+      const w = (it.width ?? 0);
+      const str = it.str || '';
+      if (!str) continue;
+
+      // New line if large Y difference upwards/downwards
+      const isNewLine = current && Math.abs(y - lastY) > lineYTol && x <= lastX + 1;
+      if (isNewLine) {
+        lines.push(current);
+        current = '';
+        lastX = 0; lastW = 0;
       }
-      return '';
-    }).join(' ');
-    
+
+      // Space decision based on x-gap
+      const gap = current ? (x - (lastX + lastW)) : 0;
+      const prevChar = current ? current[current.length - 1] : '';
+      if (current && shouldSpace(prevChar, str, gap, lastW)) {
+        current += ' ';
+      }
+
+      // Merge content; avoid double spaces around quotes introduced by PDFs
+      current += str;
+      lastX = x; lastY = y; lastW = w || (str.length ? str.length * 0.5 : 5);
+    }
+    if (current) lines.push(current);
+
+    // Always remove only page-number-only lines (preserve all other content).
+    lines = lines.filter(l => !isPageNumberLine(l));
+
+    // Always preserve punctuation/spaces as extracted; no post-formatting fixes here.
+    const pageText = lines.join('\n');
+
     fullText += pageText + '\n\n';
 
     // Report progress after each page is processed

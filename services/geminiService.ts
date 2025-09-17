@@ -76,7 +76,19 @@ export const performOcrOnPdf = async (file: File, onApiCall: () => void, mode: P
     try {
         onApiCall();
         const filePart = await fileToGenerativePart(file);
-        const prompt = "You are an Optical Character Recognition (OCR) expert. Extract all text from the provided document, preserving the original layout and line breaks as much as possible. Return only the extracted text without any additional commentary or explanation.";
+        const prompt = `You are an expert OCR engine.
+TASK: Extract ALL visible text faithfully.
+HARD REQUIREMENTS:
+1. Preserve EVERY numeric character exactly as it appears (including superscript footnote references, inline clause numbers, years, decimals).
+2. If a superscript footnote reference (e.g., ¹,²,³) appears inline, output the corresponding normal digit right at that position (do NOT drop it).
+3. Preserve footnote content at bottom of pages. If multiple lines belong to one footnote, keep line breaks.
+4. Do NOT merge or remove repeated numbers; do NOT guess or fabricate numbers.
+5. Keep original line breaks where reasonably possible; do not wrap paragraphs aggressively.
+6. Do NOT add commentary or labels—return ONLY raw extracted text.
+7. If a page footer contains only a page number (e.g., '12 - 1'), still output it (limpeza posterior decidirá se remove).
+8. Do NOT collapse multiple consecutive spaces if that would cause digits to touch words; minimal normalization only.
+
+Return only the extracted text.`;
         const config: any = { temperature: 0.1 };
         if (mode === ProcessingMode.FAST) config.thinkingConfig = { thinkingBudget: 0 };
         const response = await callGeminiWithRetries({
@@ -84,7 +96,16 @@ export const performOcrOnPdf = async (file: File, onApiCall: () => void, mode: P
             contents: { parts: [{ text: prompt }, filePart] },
             config
         });
-        return response.text ?? '';
+        let text = response.text ?? '';
+        // Normalização: converter dígitos sobrescritos Unicode para dígitos normais mantendo posição.
+        const superscriptMap: Record<string,string> = { '⁰':'0','ⁱ':'i','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9' };
+        text = text.replace(/[⁰ⁱ¹²³⁴⁵⁶⁷⁸⁹]/g, ch => superscriptMap[ch] || ch);
+        // Salva baseline numérica pós-OCR para comparações posteriores (pré-limpeza / chunking)
+        try {
+            const numericCount = (text.match(/\b\d+\b/g) || []).length;
+            localStorage.setItem('ocr_numeric_baseline', JSON.stringify({ time: Date.now(), file: file.name, count: numericCount }));
+        } catch {}
+        return text;
     } catch (error) {
         console.error('Error performing OCR with Gemini API:', error);
         let errorMessage = 'An unknown error occurred during OCR.';
@@ -336,22 +357,58 @@ Return the entire chunk with only the added tags where appropriate—no commenta
 
 // Prompt somente para marcar footnotes com marcadores neutros sem reescrever texto.
 export const getTaskInstructionsForFootnotesMarkers = () => (`
-OBJECTIVE: Insert ONLY neutral markers for footnote references and footnote definition lines without modifying any other text.
+**OBJECTIVE (PHASE 1 – FOOTNOTES ONLY)**
+Identify and TAG footnote reference numbers that appear inline in the body text AND the corresponding footnote definition lines at (or near) the bottom of the chunk. Output MUST be the FULL original chunk text with ONLY the required footnote tags inserted in place; never remove, summarize, or reorder anything. This phase does NOT add headline tags.
 
-MARKERS TO USE (STRICT):
-- Inline reference (keep number exactly where it is): replace JUST the number token with [[FN_REF:N]] (no added spaces) OR wrap it if it is a standalone token.
-    Example: "... agreement 12 shall" => if 12 is a superscript reference, output "... agreement [[FN_REF:12]] shall".
-- Footnote definition line (starts a line with number + space/punctuation then explanatory text): prefix the original line with [[FN_DEF:N]] and a single space.
-    Example original line: "12 This is a footnote text" => "[[FN_DEF:12]] 12 This is a footnote text"
+**TAGS TO APPLY (FINAL SCHEMA – not neutral markers)**
+1. Inline reference number (appears within a sentence or immediately after a word and refers to a footnote):  {{footnotenumberN}}N{{-footnotenumberN}}
+2. Footnote definition line (a standalone line that starts with the same N and then explanatory text):  {{footnoteN}}Original full footnote text line EXACTLY as received{{-footnoteN}}
 
-RULES:
-1. DO NOT reflow, rewrite, normalize, or delete any text.
-2. DO NOT change capitalization or spacing except inserting the marker tokens.
-3. If uncertain whether a number is a page number or footnote definition, DO NOTHING.
-4. Never invent markers for numbers inside dates, article numbers, section headings, numeric lists, or enumerated paragraphs ((a), 1., 2.1, etc.).
-5. Return the FULL chunk unchanged except for inserted markers.
-6. Do NOT wrap the entire line; only prefix definition lines or replace inline numeric reference tokens.
-7. If a line already contains a marker, leave it as-is (avoid duplication).
+**DETECTION RULES (Inline Reference)**
+An inline reference number:
+- Is a small integer (1–400) that appears right after a word, punctuation, or closing parenthesis and is followed by a space, punctuation, end of line, or another reference.
+- Is NOT: (a) a list item / clause number at the start of the line, (b) part of an Article/Section/Chapter heading, (c) part of a date (e.g., 2024), (d) part of a decimal (e.g., 3.2), (e) a page number standing alone on its own line.
+If ambiguous, leave it untouched.
 
-OUTPUT: Entire chunk with markers inserted. No commentary.
+**DETECTION RULES (Definition Line)**
+A footnote *definition* line normally matches pattern:
+^N[).:\-]?\s+<descriptive text with at least 2 words>
+Where N = reference number. Examples:
+"1 This Agreement..."
+"12. For purposes of ..."
+"5) See Annex A for details"
+Edge cases: a definition MAY span multiple lines, but in this phase you ONLY tag the FIRST line that starts with the number – leave subsequent wrapped lines unchanged.
+
+**SAFETY / CONSERVATION**
+1. NEVER delete or rewrite any other text.
+2. NEVER renumber or create synthetic footnotes.
+3. NEVER wrap a line twice. If it already has {{footnoteN}} or {{footnotenumberN}} tags, leave it as-is.
+4. KEEP all spacing and line breaks exactly (except the added tags).
+5. If you detect zero footnotes, simply return the original chunk unchanged.
+
+**CRITICAL INTEGRITY GUARDS**
+1. You MUST return the entire original chunk length (minus only the added tag characters). Empty or drastically shortened output is a CRITICAL FAILURE.
+2. Do NOT add commentary, explanations, or extra lines.
+3. Do NOT convert or add headline tags in this phase.
+
+**EXAMPLES**
+Input snippet:
+Agreement obligations shall survive termination 3.
+3 This obligation survives termination for 2 years.
+
+Correct output:
+Agreement obligations shall survive termination {{footnotenumber3}}3{{-footnotenumber3}}.
+{{footnote3}}3 This obligation survives termination for 2 years.{{-footnote3}}
+
+Another input snippet:
+Text continues (see Annex) 12 and more text.
+12. Annex clarifies obligations under Article 5.
+
+Output:
+Text continues (see Annex) {{footnotenumber12}}12{{-footnotenumber12}} and more text.
+{{footnote12}}12. Annex clarifies obligations under Article 5.{{-footnote12}}
+
+If a number is actually a clause starter (e.g., "12. Scope") which looks like a heading or article title, DO NOT tag it here unless it is clearly a footnote definition (footnotes are usually short explanatory references, not full structural headings).
+
+Return ONLY the transformed chunk.
 `);

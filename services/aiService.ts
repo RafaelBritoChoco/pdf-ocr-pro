@@ -4,6 +4,26 @@
 import { ProcessingMode } from '../types';
 import { performOcrOnPdf as geminiOcr, processDocumentChunk as geminiProcess, setGeminiApiKey } from './geminiService';
 import { callOpenRouter } from './openRouterService';
+import { buildMasterPrompt } from './masterPrompt';
+import { cleanText, isCleanupOnlyMode } from './textCleanup';
+import { auditInlineNumericRefs } from './footnoteAudit';
+import { auditHeadings } from './headingAudit';
+import { addAuditEvent } from './auditLogService';
+
+// DRÁSTICA SIMPLIFICAÇÃO: Todo o fluxo OpenRouter agora replica exatamente o MASTER PROMPT do Gemini.
+// Nenhuma estratégia, pré-limpeza, auditoria ou sanitização adicional.
+function getOpenRouterStrategy(): 'clone' { return 'clone'; }
+function isCloneGeminiMode() { return true; }
+function recordStrategy(_: string) { /* no-op */ }
+function markStrategyUsed(_: string) { /* no-op */ }
+
+// Normalização local de dígitos sobrescritos para preservar a informação numérica em modelos que tendem a omiti-los.
+function normalizeSuperscripts(input: string): string {
+  if (!input) return input;
+  // Não converto 'ⁱ' para número porque pode ser literal; mantemos 'i' conforme lógica usada no gemini OCR.
+  const map: Record<string, string> = { '⁰':'0','ⁱ':'i','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9' };
+  return input.replace(/[⁰ⁱ¹²³⁴⁵⁶⁷⁸⁹]/g, ch => map[ch] || ch);
+}
 
 export type Provider = 'gemini' | 'openrouter';
 
@@ -22,163 +42,232 @@ export interface ProcessChunkArgs {
   onApiCall: () => void;
   mode: ProcessingMode;
   provider: Provider;
-  qwenModel?: string; // optional override when using openrouter
+  openRouterModel?: string; // optional override when using openrouter (Qwen, Llama 3, etc.)
+  expectedSessionId?: string; // nova checagem de consistência de sessão
 }
 
 // Pré-limpeza específica para OpenRouter (Qwen) em texto completo antes do chunking.
 // Objetivo: remover lixo óbvio (headers repetitivos, numeração de página isolada, múltiplos espaços) sem alterar estrutura.
-export async function initialNormalizeWithOpenRouter(fullText: string, provider: Provider, qwenModel?: string): Promise<string> {
-  if (provider !== 'openrouter') return fullText;
-  const key = localStorage.getItem('openrouter_api_key');
-  if (!key) return fullText;
-  console.log('[AI][OpenRouter/Qwen][Pre] Iniciando pré-limpeza texto completo length=%d', fullText.length);
-  const model = qwenModel || 'qwen/qwen-2.5-7b-instruct';
-  const system = `You are a conservative pre-cleaning agent. You must ONLY remove obvious noise and leave meaningful content untouched.
-CRITICAL: Preserve ALL footnote indicators and reference numbers (e.g., 1, 2, 3, 12) that appear inline or at line start followed by a space or punctuation. Do NOT remove or renumber them.`;
-  const user = `RULES:
-1. Keep all paragraphs, line breaks, list markers, numbering, indentation.
-2. PRESERVE footnote markers: patterns like "1 ", "1.", "(1)", "[1]" at line start OR numeric references in superscript style represented plainly (e.g., trailing numbers after a word). Do not delete these numbers.
-3. Remove page headers/footers repeated across pages (e.g., lines that appear on many pages alone at top/bottom) ONLY if they are not footnotes.
-4. Remove standalone page numbers lines (e.g., "12", "- 12 -", "Page 12") but NOT footnote definition lines of the form "1 Texto da nota" (those must remain intact).
-5. Normalize multiple blank lines to at most two.
-6. Fix repeated spaces > 2 into single spaces.
-7. Do NOT summarize or rewrite sentences.
-8. Return ONLY the cleaned text.
-
-EXAMPLES PRESERVE:
-"1 Texto da nota" => Keep exactly.
-"12 Esta é outra nota" => Keep exactly.
-"Referência importante 3" (where 3 is a footnote reference) => Keep the 3.
-
-TEXT:
-${fullText}`;
-  try {
-    const cleaned = await callOpenRouter({
-      model,
-      temperature: 0.1,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ]
-    });
-    if (cleaned.trim().length === 0) {
-      console.warn('[AI][OpenRouter/Qwen][Pre] Resposta vazia, mantendo original.');
-      return fullText;
-    }
-    console.log('[AI][OpenRouter/Qwen][Pre] Pré-limpeza concluída length=%d delta=%d', cleaned.length, cleaned.length - fullText.length);
-    return cleaned;
-  } catch (e) {
-    console.error('[AI][OpenRouter/Qwen][Pre] Falha pré-limpeza, usando original:', e);
-    return fullText;
-  }
+export async function initialNormalizeWithOpenRouter(fullText: string, _provider: Provider, _openRouterModel?: string): Promise<string> {
+  // Pré-limpeza desativada: retornamos o texto original sem modificações.
+  return fullText;
 }
 
 // Wrapper to normalize responses for OpenRouter
 async function processWithOpenRouter(args: ProcessChunkArgs): Promise<string> {
-  const systemPrompt = `You are an expert LEGAL / TECHNICAL document cleaner & structural preserver.
-Rules (CRITICAL):
-1. Preserve paragraph boundaries and blank lines that separate logical blocks.
-2. Preserve bullet / list indicators (e.g., (a), (i), -, •, 1.) exactly as they appear unless they are obvious OCR glitches.
-3. PRESERVE ALL footnote markers / reference numbers (e.g., 1, 2, 12) whether they appear:
-   - At the start of a line followed by space or punctuation (likely footnote definition)
-   - Inline after a word (likely a reference)
-   - In parentheses or brackets: (1), [1], {1}
-4. DO NOT collapse multiple paragraphs into one.
-5. Remove ONLY page headers/footers, page numbers, stray artifacts – but DO NOT remove lines that look like footnote definitions (e.g., "3 Texto da nota" with meaningful text after the number).
-6. Fix spacing anomalies (double spaces, space before punctuation) and OCR character errors.
-7. Keep original language and wording; do not summarize.
-8. Return ONLY the transformed chunk text (no explanations).`;
+  // CLEANUP-ONLY MODE: deterministic normalization without any LLM call.
+  if (isCleanupOnlyMode()) {
+    const original = normalizeSuperscripts(args.main_chunk_content);
+    const cleaned = normalizeSuperscripts(cleanText(args.main_chunk_content));
+    // Emit diagnostics event so panel shows OpenRouter context even in cleanup-only.
+    try {
+      const numAudit = auditInlineNumericRefs(original, cleaned);
+      const headAudit = auditHeadings(original, cleaned);
+      addAuditEvent({
+        time: Date.now(),
+        provider: 'openrouter',
+        chunkPreview: original.slice(0, 60),
+        numericLost: numAudit.lost.length ? numAudit.lost : undefined,
+        headingLost: headAudit.lostHeadings.length ? headAudit.lostHeadings : undefined,
+        lossRatio: numAudit.lossRatio,
+        retried: false,
+        final: true,
+        model: 'cleanup-only'
+      });
+    } catch {}
+    return cleaned;
+  }
+  // Prompt 100% alinhado ao MASTER_PROMPT usado em geminiService.processDocumentChunk
+  const injectFootnoteBlock = (() => {
+    try {
+      // Enable via localStorage flag or if task_instructions menciona 'footnote'
+      const flag = localStorage.getItem('enable_openrouter_numeric_block');
+      if (flag === '1' || /footnote/i.test(args.task_instructions)) return true;
+    } catch {}
+    return false;
+  })();
 
-  const mergedPrompt = `CONTEXT SUMMARY (for continuity, do not repeat):\n${args.continuous_context_summary}\n\nOVERLAPS (for continuity only, do not include in final output)\n[PREVIOUS]\n${args.previous_chunk_overlap}\n[ NEXT ]\n${args.next_chunk_overlap}\n\nTASK INSTRUCTIONS (to apply):\n${args.task_instructions}\n\nIMPORTANT FOOTNOTE HANDLING:\n- Do NOT remove numeric footnote definitions (e.g., '5 Texto da nota')\n- Do NOT strip inline numeric references.\n- If uncertain whether a number is a page number or a footnote: KEEP IT.\n\nMAIN CHUNK TO PROCESS (transform this respecting rules):\n${args.main_chunk_content}`;
-  const temperature = args.mode === ProcessingMode.FAST ? 0.1 : 0.2;
-  const model = args.qwenModel || 'qwen/qwen-2.5-7b-instruct';
-  const original = args.main_chunk_content;
-  const originalNewlines = (original.match(/\n/g) || []).length;
-  const first = await callOpenRouter({
+  // Fail-safe geral (documentado mais adiante na auditoria final):
+  // localStorage.enable_openrouter_fail_safe = '1' -> Se após retry ainda houver perda de números/headings, retorna chunk original normalizado
+  // Objetivo: ZERO perda silenciosa. Preferimos nenhuma transformação a perder dados.
+
+  const originalChunk = args.main_chunk_content;
+  const normalizedChunk = normalizeSuperscripts(originalChunk);
+
+  // Extrai lista de referências numéricas inline (curtas) para reforçar preservação.
+  let inlineRefList: string[] = [];
+  try {
+    inlineRefList = Array.from(new Set((normalizedChunk.match(/(?<=\w)(\d{1,3})(?=[\s\.,;:'"\)\]\}]|$)/g) || []).slice(0, 40)));
+  } catch {}
+  const enrichedTaskInstructions = injectFootnoteBlock && inlineRefList.length
+    ? `${args.task_instructions}\n\n[REFERENCE DIGITS TO PRESERVE EXACTLY]\n${inlineRefList.join(', ')}`
+    : args.task_instructions;
+
+  const geminiMasterPrompt = buildMasterPrompt({
+    continuous_context_summary: args.continuous_context_summary,
+    previous_chunk_overlap: args.previous_chunk_overlap,
+    next_chunk_overlap: args.next_chunk_overlap,
+    task_instructions: enrichedTaskInstructions,
+    // Normalizamos somente o chunk principal para não alterar overlaps (que são apenas contexto)
+    main_chunk_content: normalizedChunk,
+    injectFootnoteBlock,
+    includeTaggingExamples: injectFootnoteBlock && /tag|footnote|marcador/i.test(args.task_instructions)
+  });
+  const temperature = 0.1; // Paridade total com Gemini (sem variação por modo)
+  const model = args.openRouterModel || localStorage.getItem('openrouter_model') || 'qwen/qwen-2.5-7b-instruct';
+  try {
+    const result = await callOpenRouter({
       model,
       temperature,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: mergedPrompt }
-      ]
-  });
-
-  // Similaridade simples baseada em proporção de caracteres iguais após normalização.
-  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
-  const normOriginal = normalize(original);
-  const normFirst = normalize(first);
-  const minLen = Math.min(normOriginal.length, normFirst.length);
-  let equal = 0;
-  for (let i = 0; i < minLen; i++) if (normOriginal[i] === normFirst[i]) equal++;
-  const similarity = minLen === 0 ? 0 : equal / minLen;
-  console.log('[AI][OpenRouter/Qwen] similarity=%d lenOrig=%d lenOut=%d', similarity, normOriginal.length, normFirst.length);
-
-  // Heurística adicional: se perdeu muitas quebras de linha (achatou)
-  const firstNewlines = (first.match(/\n/g) || []).length;
-  const newlineRatio = originalNewlines === 0 ? 1 : firstNewlines / originalNewlines;
-  const flattened = originalNewlines > 6 && newlineRatio < 0.4; // perdeu >60% das quebras
-  if (flattened) {
-    console.log('[AI][OpenRouter/Qwen] Detecção de achatamento: originalNewlines=%d, firstNewlines=%d, ratio=%d', originalNewlines, firstNewlines, newlineRatio);
-  }
-
-  // Simple heuristic to detect if many leading footnote numbers disappeared:
-  const lostFootnotePattern = /^\s*(\d{1,3})[\s).:-]/m;
-  const originalHasNotes = (original.match(/^\s*\d{1,3}[\s).:-]/gm) || []).length;
-  const firstHasNotes = (first.match(/^\s*\d{1,3}[\s).:-]/gm) || []).length;
-  const footnoteLoss = originalHasNotes > 0 && firstHasNotes === 0;
-  if (footnoteLoss) {
-    console.log('[AI][OpenRouter/Qwen] Possível perda de notas de rodapé: restaurando números.');
-  }
-
-  if (footnoteLoss) {
-    // Attempt a reinforced second pass focusing on keeping numbers
-    const reinforcement = mergedPrompt + '\n\nCRITICAL: You REMOVED footnote markers. Restore ALL original numeric markers and definitions exactly while still cleaning noise.';
-    const secondFoot = await callOpenRouter({
-      model,
-      temperature: 0.15,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: reinforcement }
-      ]
+      messages: [ { role: 'user', content: geminiMasterPrompt } ]
     });
-    // If still no markers, fallback to original (safer than losing them)
-    const secondHas = (secondFoot.match(/^\s*\d{1,3}[\s).:-]/gm) || []).length;
-    if (secondHas > 0) {
-      return secondFoot;
-    } else {
-      console.warn('[AI][OpenRouter/Qwen] Segunda tentativa ainda sem footnotes. Mantendo chunk original para preservar marcadores.');
-      return original;
-    }
-  }
+  const finalText = (result || '').trim() || originalChunk;
+    let audited = finalText;
+    let didRetry = false;
+    try {
+      // --- Retry / Audit Flags (documentação) ---
+      // localStorage.enable_openrouter_retry_numeric = '1' -> habilita retry quando houver perda de números inline
+      // localStorage.enable_openrouter_retry_headings = '1' -> habilita retry quando headings candidatas sumirem
+      // localStorage.openrouter_retry_loss_ratio = '0.15'  -> limiar de proporção de perda (default 0.15 = 15%)
+      // localStorage.openrouter_retry_max_lost_cap = '5'   -> se perda <= cap, ainda consideramos retry mesmo que lossRatio baixo
+      // localStorage.enable_openrouter_numeric_block = '1'  -> injeta bloco de regras/footnotes no prompt
+      // Todos são opcionais; ausência mantém comportamento simplificado.
+  const enableRetryNumeric = localStorage.getItem('enable_openrouter_retry_numeric') === '1';
+      const enableRetryHeadings = localStorage.getItem('enable_openrouter_retry_headings') === '1';
+      const numericAudit = auditInlineNumericRefs(normalizedChunk, finalText);
+      const headingAudit = auditHeadings(normalizedChunk, finalText);
+      const lossRatioThreshold = parseFloat(localStorage.getItem('openrouter_retry_loss_ratio') || '0.15');
+      const maxRetryLostCap = parseInt(localStorage.getItem('openrouter_retry_max_lost_cap') || '5', 10);
 
-  if ((similarity > 0.97 && Math.abs(normOriginal.length - normFirst.length) < 20) || flattened) {
-    console.log('[AI][OpenRouter/Qwen] Output pouco alterado OU achatado. Reforçando prompt e tentando segunda vez.');
-    const formattingReinforcement = flattened ? '\nYou REMOVED too many line breaks. Restore paragraph separation and list structure.' : '';
-    const reinforcement = mergedPrompt + '\n\nIMPORTANT:\nApply ALL cleaning rules. Keep paragraph and list structure intact. Remove only noise.' + formattingReinforcement + '\nIf text was already clean, still ensure consistent spacing & line breaks. Return ONLY the cleaned chunk.';
-    const second = await callOpenRouter({
-      model,
-      temperature: temperature === 0.1 ? 0.15 : temperature,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: reinforcement }
-      ]
-    });
-    const normSecond = normalize(second);
-    const secondNewlines = (second.match(/\n/g) || []).length;
-    const secondFlattened = originalNewlines > 6 && (secondNewlines / originalNewlines) < 0.4;
-    if (normSecond !== normOriginal && !secondFlattened) {
-      return second;
+      const shouldRetryNumeric = enableRetryNumeric && numericAudit.lost.length > 0 && (numericAudit.lossRatio >= lossRatioThreshold || numericAudit.lost.length <= maxRetryLostCap);
+      const shouldRetryHeadings = enableRetryHeadings && headingAudit.lostHeadings.length > 0; // for headings, any loss triggers (they're rarer)
+
+      // Log initial audit snapshot
+      if (injectFootnoteBlock) {
+        addAuditEvent({
+          time: Date.now(),
+            provider: 'openrouter',
+            chunkPreview: originalChunk.slice(0, 60),
+            numericLost: numericAudit.lost.length ? numericAudit.lost : undefined,
+            headingLost: headingAudit.lostHeadings.length ? headingAudit.lostHeadings : undefined,
+            lossRatio: numericAudit.lossRatio,
+            retried: false,
+            final: false,
+            model
+        });
+      }
+
+      if ((shouldRetryNumeric || shouldRetryHeadings) && !didRetry) {
+        didRetry = true;
+        const reinforcementParts: string[] = [];
+        if (shouldRetryNumeric) {
+          reinforcementParts.push(`You removed inline numeric references: ${numericAudit.lost.join(', ')}. Restore EACH digit exactly in original positions.`);
+        }
+        if (shouldRetryHeadings) {
+          reinforcementParts.push(`You removed structural heading lines: ${headingAudit.lostHeadings.map(h=>`"${h}"`).join(', ')}. Re-output them EXACTLY as they appeared.`);
+        }
+        reinforcementParts.push('Return FULL chunk text with corrections. Do NOT summarize, do NOT invent new headings, only restore missing elements. If already correct, just repeat previous output unchanged.');
+
+        const reinforcement = `\n[CORRECTION PASS]\n${reinforcementParts.join('\n')}`;
+        const retryPrompt = geminiMasterPrompt + reinforcement;
+        try {
+          const retryResult = await callOpenRouter({
+            model,
+            temperature,
+            messages: [ { role: 'user', content: retryPrompt } ]
+          });
+          if (retryResult && retryResult.trim().length > 0) {
+            audited = retryResult.trim();
+          }
+          if (injectFootnoteBlock) {
+            addAuditEvent({
+              time: Date.now(),
+              provider: 'openrouter',
+              chunkPreview: originalChunk.slice(0, 60),
+              numericLost: numericAudit.lost.length ? numericAudit.lost : undefined,
+              headingLost: headingAudit.lostHeadings.length ? headingAudit.lostHeadings : undefined,
+              lossRatio: numericAudit.lossRatio,
+              retried: true,
+              final: false,
+              model
+            });
+          }
+        } catch (re) {
+          console.warn('[AI][OpenRouter][Retry] Falha no retry, mantendo primeira resposta.', re);
+        }
+      }
+      // Final audit and optional fail-safe: ALWAYS evaluate to prevent silent removals
+      const finalNumericAudit = auditInlineNumericRefs(normalizedChunk, audited);
+      const finalHeadingAudit = auditHeadings(normalizedChunk, audited);
+      // Default fail-safe ON if flag missing; disable only if explicitly set to '0'
+      const fsFlag = localStorage.getItem('enable_openrouter_fail_safe');
+      const enableFailSafe = fsFlag === '1' || fsFlag === null;
+      let failSafeTriggered = false;
+      if (enableFailSafe && (finalNumericAudit.lost.length > 0 || finalHeadingAudit.lostHeadings.length > 0)) {
+        // Fail-safe: return ORIGINAL (normalized) chunk to avoid any loss.
+        console.warn('[AI][OpenRouter][FailSafe] Perdas detectadas. Retornando chunk ORIGINAL para preservar dígitos/headings.');
+        audited = normalizedChunk; // keep only superscript normalization
+        failSafeTriggered = true;
+      } else {
+        if (finalNumericAudit.lost.length) {
+          console.warn('[AI][OpenRouter][Audit][Final] Ainda faltam inline refs', finalNumericAudit);
+        }
+        if (finalHeadingAudit.lostHeadings.length) {
+          console.warn('[AI][OpenRouter][Audit][Final] Ainda faltam headings', finalHeadingAudit);
+        }
+      }
+      // Emit diagnostic event when either numeric block active (for visibility) or fail-safe is enabled
+      if (injectFootnoteBlock || enableFailSafe) {
+        addAuditEvent({
+          time: Date.now(),
+          provider: 'openrouter',
+          chunkPreview: originalChunk.slice(0, 60),
+          numericLost: finalNumericAudit.lost.length ? finalNumericAudit.lost : undefined,
+          headingLost: finalHeadingAudit.lostHeadings.length ? finalHeadingAudit.lostHeadings : undefined,
+          lossRatio: finalNumericAudit.lossRatio,
+          retried: didRetry,
+          final: true,
+          model,
+          failSafe: failSafeTriggered || undefined
+        });
+      }
+    } catch (e) {
+      console.warn('[AI][OpenRouter][Audit] erro auditando / retry', e);
     }
-    const locallyNormalized = original
-      .replace(/ {2,}/g, ' ')
-      .replace(/\n{3,}/g, '\n\n');
-    console.log('[AI][OpenRouter/Qwen] Segunda tentativa ainda inadequada (flatten=%s). Retornando versão localmente normalizada.', secondFlattened);
-    return locallyNormalized;
+    return audited;
+  } catch (e: any) {
+    const msg = (e?.message || '').toString();
+    if (msg.includes('MODEL_NOT_FOUND 404') && model !== 'qwen/qwen-2.5-7b-instruct') {
+      // Tentativa única de fallback simples
+      const fallback = 'qwen/qwen-2.5-7b-instruct';
+      try { localStorage.setItem('openrouter_model', fallback); } catch {}
+      try {
+        const second = await callOpenRouter({
+          model: fallback,
+          temperature,
+          messages: [ { role: 'user', content: geminiMasterPrompt } ]
+        });
+        return (second || '').trim() || args.main_chunk_content;
+      } catch {}
+    }
+    console.warn('[AI][OpenRouter] Falha chunk retornando original:', msg);
+    return args.main_chunk_content;
   }
-  return first;
 }
 
 export async function processDocumentChunkUnified(args: ProcessChunkArgs): Promise<string> {
+  // Verificação de sessão para evitar processamento fantasma após F5.
+  try {
+    const activeSession = localStorage.getItem('active_session_id');
+    if (!activeSession) {
+      console.warn('[AI][processDocumentChunkUnified] Abortado: sessão inexistente (possível refresh).');
+      return args.main_chunk_content; // devolve original para não perder conteúdo
+    }
+    if (args.expectedSessionId && activeSession !== args.expectedSessionId) {
+      console.warn('[AI][processDocumentChunkUnified] Abortado: sessão divergente (stale call). expected=%s current=%s', args.expectedSessionId, activeSession);
+      return args.main_chunk_content;
+    }
+  } catch {}
   console.log('[AI][processDocumentChunkUnified] provider=%s mode=%s chunkSize=%d', args.provider, args.mode, args.main_chunk_content.length);
   if (args.provider === 'gemini') {
     const res = await geminiProcess({
@@ -193,13 +282,23 @@ export async function processDocumentChunkUnified(args: ProcessChunkArgs): Promi
     console.log('[AI][Gemini] chunk processed length=%d', res.length);
     return res;
   }
+  // For OpenRouter provider, allow cleanup-only short-circuit before any API usage.
+  if (isCleanupOnlyMode()) {
+    const cleaned = normalizeSuperscripts(cleanText(args.main_chunk_content));
+    console.log('[AI][OpenRouter][CleanupOnly] chunk cleaned length=%d', cleaned.length);
+    return cleaned;
+  }
   args.onApiCall();
   try {
     const res = await processWithOpenRouter(args);
-    console.log('[AI][OpenRouter/Qwen] chunk processed length=%d', res.length);
+  console.log('[AI][OpenRouter] chunk processed length=%d', res.length);
     return res;
   } catch (e) {
-    console.error('[AI][OpenRouter/Qwen] erro processando chunk:', e);
+  console.error('[AI][OpenRouter] erro processando chunk:', e);
+    const msg = (e as any)?.message || String(e);
+    if (msg.includes('OpenRouter 401')) {
+      return '[ERROR OPENROUTER 401]';
+    }
     return `[ERROR OPENROUTER CHUNK]\n\n${args.main_chunk_content}`;
   }
 }
