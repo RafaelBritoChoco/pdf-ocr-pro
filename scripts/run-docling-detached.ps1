@@ -55,7 +55,7 @@ Write-Host "Using Python: $python" -ForegroundColor DarkCyan
 $args = @('-m','uvicorn','docling_service:app','--host', $BindHost, '--port', $BindPort)
 
 # Start detached (no --reload to avoid reloader lifecycle flakiness)
-$p = Start-Process -FilePath $python -ArgumentList $args -PassThru -WindowStyle Minimized -RedirectStandardOutput $logOut -RedirectStandardError $logErr
+$p = Start-Process -FilePath $python -ArgumentList $args -PassThru -WindowStyle Minimized -RedirectStandardOutput $logOut -RedirectStandardError $logErr -WorkingDirectory $rootPath
 
 if (-not $p) { throw 'Failed to start uvicorn process' }
 

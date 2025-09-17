@@ -20,7 +20,10 @@ if not exist "%VENV%\Scripts\python.exe" (
 )
 
 REM 2) Start Docling service (detached)
-%PS% "& '%ROOT%\scripts\run-docling-detached.ps1' -BindHost 127.0.0.1 -BindPort 8008 -VenvPath '%VENV%'" || goto :fail
+%PS% "& '%ROOT%\scripts\run-docling-detached.ps1' -BindHost 127.0.0.1 -BindPort 8008 -VenvPath '%VENV%'"
+if errorlevel 1 (
+  echo [warn] Docling failed to start. The frontend will still open; check scripts\logs\*.err.log and retry.
+)
 
 REM 3) Start Vite dev in a new window
 pushd "%ROOT%"
@@ -36,7 +39,8 @@ echo [info] Docling health: http://127.0.0.1:8008/health  (should return {"statu
 echo [info] If the app says "Docling Offline", open DevTools (F12) and run:
 echo        localStorage.setItem('docling_endpoint','http://127.0.0.1:8008')
 echo.
-echo [done] All set. Close this window if not needed.
+echo [done] Frontend opened. If Docling shows offline, check logs and run again:
+echo        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-docling-detached.ps1 -VenvPath '%VENV%'
 exit /b 0
 
 :fail
