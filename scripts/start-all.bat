@@ -30,7 +30,10 @@ start "" http://localhost:5173/
 REM 4) Start Docling service in a separate window (non-blocking)
 start "docling" powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\run-docling-detached.ps1" -BindHost 127.0.0.1 -BindPort 8008 -VenvPath "%VENV%"
 
-REM 5) Optional: print a quick health check instruction
+REM 5) Start Docling watchdog to auto-restart if it goes down (optional)
+start "docling-watchdog" powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\docling-watchdog.ps1" -VenvPath "%VENV%" -IntervalSeconds 60
+
+REM 6) Optional: print a quick health check instruction
 echo.
 echo [info] Docling health: http://127.0.0.1:8008/health  (should return {"status":"ok"})
 echo [info] If the app says "Docling Offline", open DevTools (F12) and run:
