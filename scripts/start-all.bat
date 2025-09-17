@@ -19,19 +19,16 @@ if not exist "%VENV%\Scripts\python.exe" (
   echo [setup] External venv found at %VENV%.
 )
 
-REM 2) Start Docling service (detached)
-%PS% "& '%ROOT%\scripts\run-docling-detached.ps1' -BindHost 127.0.0.1 -BindPort 8008 -VenvPath '%VENV%'"
-if errorlevel 1 (
-  echo [warn] Docling failed to start. The frontend will still open; check scripts\logs\*.err.log and retry.
-)
-
-REM 3) Start Vite dev in a new window
+REM 2) Start Vite dev in a new window (first, so the app is available immediately)
 pushd "%ROOT%"
 start "vite" cmd /c npm run dev
 popd
 
-REM 4) Open the app in the default browser
+REM 3) Open the app in the default browser
 start "" http://localhost:5173/
+
+REM 4) Start Docling service in a separate window (non-blocking)
+start "docling" powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\run-docling-detached.ps1" -BindHost 127.0.0.1 -BindPort 8008 -VenvPath "%VENV%"
 
 REM 5) Optional: print a quick health check instruction
 echo.
@@ -39,8 +36,8 @@ echo [info] Docling health: http://127.0.0.1:8008/health  (should return {"statu
 echo [info] If the app says "Docling Offline", open DevTools (F12) and run:
 echo        localStorage.setItem('docling_endpoint','http://127.0.0.1:8008')
 echo.
-echo [done] Frontend opened. If Docling shows offline, check logs and run again:
-echo        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-docling-detached.ps1 -VenvPath '%VENV%'
+echo [done] Frontend opened. Docling starts in a separate window; if it fails, check scripts\logs and run again:
+echo        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-docling-detached.ps1 -VenvPath "%VENV%"
 exit /b 0
 
 :fail
