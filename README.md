@@ -2,23 +2,85 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# PDF OCR 2.4 – Extração + Estruturação Inteligente
+# PDF OCR Pro 2.4 – Extração + Estruturação Inteligente
 
-App local para extração de texto de PDFs com opção de OCR (via Docling) e estruturação assistida por IA. Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
+**🎯 Status: 80% Completo - Funcional com melhorias identificadas**
+
+App local para extração de texto de PDFs com integração Docling e estruturação assistida por IA. Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
+
+## 🚀 Início Rápido
+
+**Modo Simples - Um Clique:**
+1. Execute: `start.bat` (duplo-clique)
+2. Aguarde a aplicação abrir no navegador
+3. Faça upload do PDF e processe!
+
+## 📋 Status Atual do Sistema
+
+### ✅ **Funcionalidades Implementadas**
+- **Extração Docling**: PyPdfiumDocumentBackend otimizado e estável
+- **Limpeza de Markdown**: Remove artefatos automáticamente (~2.5s de processamento)
+- **Interface Moderna**: Frontend React com painéis de diagnóstico
+- **Worker Isolado**: Sem crashes de memória (OSError 1455 resolvido)
+- **Extração Headlines**: Funcional (mas processa footnotes também)
+- **Sistema Unificado**: Arquivo único `start.bat` para tudo
+
+### 🔧 **Próximas Melhorias** (Ver [TODO.md](TODO.md) para detalhes)
+1. **🚨 CRÍTICO**: Botão footnotes não funciona
+2. **📊 MÉDIO**: Headlines processando footnotes junto  
+3. **🔄 BAIXO**: Terceiro passo precisa refinamento
+
+### 🛠️ **Para Desenvolvedores**
+- **Debug Footnotes**: `components/ExtractorToggle.tsx` + `services/openrouterFootnote.ts`
+- **Fix Headlines**: Ajustar prompts em `prompts/doclingTemplates.ts`
+- **Logs**: DevTools Console + `scripts/logs/docling-*.out.log`
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js + Python 3.8+
 
+### **Método Recomendado - Auto Setup**
+1. Execute: `start.bat` (duplo-clique)
+   - Cria venv automaticamente
+   - Instala dependências Python e Node.js
+   - Inicia backend + frontend
+   - Abre navegador
 
-1. Install dependencies:
-   `npm install`
-2. Copie `.env.example` para `.env.local` e preencha as chaves (NÃO comite `.env.local`):
-   - `GEMINI_API_KEY=...`
-   - (Opcional) `OPENROUTER_API_KEY=...`
-   - (Opcional) Model overrides: `GEMINI_MODEL=` / `OPENROUTER_MODEL=`
-3. Execute localmente:
-   `npm run dev`
+### **Método Manual**
+1. Instalar dependências Node.js: `npm install`
+2. Criar ambiente Python: `python -m venv .venv`
+3. Ativar venv: `.venv\Scripts\activate` (Windows)
+4. Instalar Python deps: `pip install -r requirements.txt`
+5. Iniciar backend: `python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008`
+6. Iniciar frontend: `npm run dev`
+
+## 🏗️ Arquitetura do Sistema
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Frontend      │    │    Backend       │    │   Docling       │
+│   React:5173    │◄──►│   FastAPI:8008   │◄──►│   Worker        │
+│                 │    │                  │    │   (Isolated)    │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+  - ExtractorToggle      - docling_service.py    - docling_worker.py
+  - ResultViewer         - AI Services           - PyPdfiumBackend
+  - ConfigScreen         - OpenRouter/Gemini     - Markdown Cleanup
+```
+
+### **Fluxo de Processamento**
+1. **Upload**: Frontend → Backend FastAPI
+2. **Extração**: Backend → Docling Worker (isolado)
+3. **Processamento IA**: Backend → OpenRouter/Gemini APIs
+4. **Resultado**: Backend → Frontend (exibição)
+
+### **Principais Componentes**
+- `start.bat`: Inicialização completa do sistema
+- `docling_service.py`: API backend FastAPI
+- `scripts/docling_worker.py`: Worker isolado de processamento  
+- `services/aiService.ts`: Orquestração de IA no frontend
+- `components/ExtractorToggle.tsx`: Interface de extração
 
 ### Variáveis de Ambiente
 
