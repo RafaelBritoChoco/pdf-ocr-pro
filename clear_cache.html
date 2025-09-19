@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Docling Cache</title>
+</head>
+<body>
+    <h1>Clear Docling Cache & Test</h1>
+    <button onclick="clearCache()">Clear Cache & Reload</button>
+    <div id="results"></div>
+    
+    <script>
+        function clearCache() {
+            // Clear all Docling related localStorage
+            const keys = Object.keys(localStorage);
+            for (const key of keys) {
+                if (key.includes('docling') || key.includes('endpoint')) {
+                    localStorage.removeItem(key);
+                    console.log('Removed:', key);
+                }
+            }
+            
+            // Also clear these specifically
+            localStorage.removeItem('docling_endpoint');
+            localStorage.removeItem('last_docling_meta');
+            
+            document.getElementById('results').innerHTML = '<p>✅ Cache cleared! Reloading...</p>';
+            
+            // Reload the main app
+            setTimeout(() => {
+                window.location.href = 'http://localhost:5173';
+            }, 1000);
+        }
+        
+        // Auto-clear on load
+        clearCache();
+    </script>
+</body>
+</html>

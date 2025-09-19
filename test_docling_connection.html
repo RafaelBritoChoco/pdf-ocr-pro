@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Docling Connection</title>
+</head>
+<body>
+    <h1>Test Docling Connection</h1>
+    <div id="results"></div>
+    
+    <script>
+        async function testDocling() {
+            const results = document.getElementById('results');
+            results.innerHTML = '<p>Testing...</p>';
+            
+            try {
+                console.log('Testing localhost:8008...');
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3000);
+                
+                const res = await fetch('http://localhost:8008/health', { 
+                    signal: controller.signal,
+                    method: 'GET'
+                });
+                clearTimeout(timeout);
+                
+                console.log('Response status:', res.status);
+                console.log('Response ok:', res.ok);
+                
+                if (!res.ok) {
+                    results.innerHTML = `<p>❌ Response not ok: ${res.status}</p>`;
+                    return;
+                }
+                
+                const data = await res.json();
+                console.log('Response data:', data);
+                
+                if (data && data.status === 'ok') {
+                    results.innerHTML = '<p>✅ Docling connection successful!</p>';
+                } else {
+                    results.innerHTML = `<p>❌ Unexpected response: ${JSON.stringify(data)}</p>`;
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                results.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+            }
+        }
+        
+        // Test automatically when page loads
+        testDocling();
+        
+        // Also test localStorage
+        console.log('localStorage docling_endpoint:', localStorage.getItem('docling_endpoint'));
+        
+        // Clear localStorage if needed
+        // localStorage.removeItem('docling_endpoint');
+    </script>
+</body>
+</html>

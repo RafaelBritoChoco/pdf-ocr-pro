@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import DiagnosticsPanel from './DiagnosticsPanel';
+import { ExtractorToggle } from './ExtractorToggle';
 
 interface ConfigurationScreenProps {
   title: string;
@@ -46,6 +47,10 @@ export const ConfigurationScreen: React.FC<ConfigurationScreenProps> = ({
                         {children}
                     </div>
                 )}
+                
+                <div className="w-full mt-2 p-3 rounded-md bg-gray-700/40 border border-gray-700 text-sm text-gray-300">
+                    <ExtractorToggle />
+                </div>
         
         <div className="w-full space-y-4">
             <label htmlFor="chunk-slider" className="block text-lg font-semibold text-center text-gray-200">

@@ -1,5 +1,7 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { ProcessingMode } from '../types';
+import { buildMasterPrompt } from './masterPrompt';
+import { DOC_HEADER_V2 } from '../prompts/doclingTemplates';
 
 // Gemini client instanciado dinamicamente após definir a chave
 let currentApiKey: string | null = null;
@@ -139,43 +141,16 @@ export const processDocumentChunk = async ({
     ensureClient();
     try {
         onApiCall();
-        const MASTER_PROMPT = `# MASTER PROMPT FOR DOCUMENT CHUNK PROCESSING
-
-[OBJECTIVE & GENERAL RULES]
-You are an expert AI document processor, operating in a pipeline that processes large documents in small chunks.
-Your sole task is to apply the instructions in the [YOUR TASK] section to the text contained in the [MAIN CHUNK TO PROCESS] section.
-The [CONTEXT] sections are provided only to ensure your work is consistent with the rest of the document.
-Your final output must contain **ONLY** the text from [MAIN CHUNK TO PROCESS] after it has been modified by you. Do not include ANY part of the context or additional explanations in your response.
-**CRITICAL RULE: Your output's character length MUST be very similar to the input chunk's length. Never truncate or summarize the content. Incomplete output is a critical failure.**
-
----
-
-[PROVIDED CONTEXT]
-
-1.  **Continuous Context Summary (Structure already processed):**
-    \`${continuous_context_summary}\`
-
-2.  **Previous Chunk Overlap (Last few lines of the previous chunk):**
-    \`\`\`
-    ${previous_chunk_overlap}
-    \`\`\`
-
-3.  **Next Chunk Overlap (First few lines of the next chunk):**
-    \`\`\`
-    ${next_chunk_overlap}
-    \`\`\`
-
----
-
-[YOUR TASK]
-Based on the context above, perform the following task on the [MAIN CHUNK TO PROCESS]:
-
-${task_instructions}
-
----
-
-[MAIN CHUNK TO PROCESS]
-${main_chunk_content}`;
+        const MASTER_PROMPT = buildMasterPrompt({
+            continuous_context_summary,
+            previous_chunk_overlap,
+            next_chunk_overlap,
+            task_instructions,
+            main_chunk_content,
+            injectFootnoteBlock: true,
+            includeTaggingExamples: false,
+            headerOverride: DOC_HEADER_V2,
+        });
         const config: any = { temperature: 0.1 };
         if (mode === ProcessingMode.FAST) config.thinkingConfig = { thinkingBudget: 0 };
         const response = await callGeminiWithRetries({

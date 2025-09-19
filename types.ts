@@ -25,3 +25,35 @@ export enum ProcessingMode {
   FAST = 'FAST',
   QUALITY = 'QUALITY',
 }
+
+// --- Docling extraction metadata types ---
+export interface DoclingHeuristicMetrics {
+  pages_sampled?: number;
+  total_chars?: number;
+  avg_chars_per_page?: number;
+  images?: number;
+  sparse_pages?: number;
+  sparse_pct?: number;
+}
+
+export interface DoclingMeta {
+  requested_mode?: 'auto' | 'simple' | 'advanced';
+  mode?: 'simple' | 'advanced';
+  pages?: number | null;
+  filename?: string;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
+  service_version?: string;
+  auto_threshold_chars_per_page?: string | null;
+  progressive?: boolean;
+  multi_phase?: boolean;
+  heuristic?: DoclingHeuristicMetrics;
+  heuristic_reasons?: string[];
+  ocr_needed?: boolean;
+  second_phase_attempted?: boolean;
+  ocr_used?: boolean;
+  memory_fallback?: boolean;
+  hard_fallback?: boolean;
+  hard_fallback_reason?: string | null;
+  forced_pypdf?: boolean;
+}

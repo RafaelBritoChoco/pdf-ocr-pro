@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "scan:secrets": "node scripts/secret-scan.js",
-    "start:all": "cmd /c scripts\\start-all.bat",
+  "start:app": "cmd /c scripts\\start-app.bat",
     "docling:up": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\run-docling-detached.ps1\" -BindHost 127.0.0.1 -BindPort 8008",
     "docling:down": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\stop-docling.ps1\"",
     "docling:watch": "powershell -ExecutionPolicy Bypass -NoProfile -File \"scripts\\docling-watchdog.ps1\" -VenvPath C:\\docling-venv -IntervalSeconds 60"

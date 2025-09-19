@@ -11,6 +11,7 @@ export interface MasterPromptParams {
   main_chunk_content: string;
   injectFootnoteBlock?: boolean; // optional extended numeric/footnote preservation guidance
   includeTaggingExamples?: boolean; // NEW: only show tagging examples when explicitly requested
+  headerOverride?: string; // NEW: allow Docling-aware header injection
 }
 
 export function buildMasterPrompt(p: MasterPromptParams): string {
@@ -26,5 +27,6 @@ export function buildMasterPrompt(p: MasterPromptParams): string {
     return false;
   })();
   const footnoteBlock = p.injectFootnoteBlock ? buildFootnoteBlock(!extractionOnly && !!p.includeTaggingExamples) : '';
-  return `${BASE_PROMPT_HEADER}\n---\n\n[PROVIDED CONTEXT]\n\n1.  **Continuous Context Summary (Structure already processed):**\n    \`${p.continuous_context_summary}\`\n\n2.  **Previous Chunk Overlap (Last few lines of the previous chunk):**\n    \`\`\`\n    ${p.previous_chunk_overlap}\n    \`\`\`\n\n3.  **Next Chunk Overlap (First few lines of the next chunk):**\n    \`\`\`\n    ${p.next_chunk_overlap}\n    \`\`\`\n\n---\n\n[YOUR TASK]\nBased on the context above, perform the following task on the [MAIN CHUNK TO PROCESS]:\n\n${p.task_instructions}\n\n---\n\n[MAIN CHUNK TO PROCESS]\n${footnoteBlock}\n\n${p.main_chunk_content}`;
+  const header = p.headerOverride && p.headerOverride.trim().length > 0 ? p.headerOverride : BASE_PROMPT_HEADER;
+  return `${header}\n---\n\n[PROVIDED CONTEXT]\n\n1.  **Continuous Context Summary (Structure already processed):**\n    \`${p.continuous_context_summary}\`\n\n2.  **Previous Chunk Overlap (Last few lines of the previous chunk):**\n    \`\`\`\n    ${p.previous_chunk_overlap}\n    \`\`\`\n\n3.  **Next Chunk Overlap (First few lines of the next chunk):**\n    \`\`\`\n    ${p.next_chunk_overlap}\n    \`\`\`\n\n---\n\n[YOUR TASK]\nBased on the context above, perform the following task on the [MAIN CHUNK TO PROCESS]:\n\n${p.task_instructions}\n\n---\n\n[MAIN CHUNK TO PROCESS]\n${footnoteBlock}\n\n${p.main_chunk_content}`;
 }

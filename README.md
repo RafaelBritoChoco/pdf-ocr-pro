@@ -4,7 +4,7 @@
 
 # PDF OCR 2.4 – Extração + Estruturação Inteligente
 
-Pipeline local de extração de texto de PDFs com opção de OCR resiliente e múltiplas etapas de estruturação assistida por IA (limpeza, detecção de títulos, notas de rodapé e marcação de conteúdo). Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
+App local para extração de texto de PDFs com opção de OCR (via Docling) e estruturação assistida por IA. Prioriza privacidade: o PDF bruto não sai do seu ambiente; somente trechos de texto são enviados ao provedor de IA escolhido.
 
 ## Run Locally
 
@@ -137,15 +137,7 @@ localStorage.setItem('openrouter_enforcement','0')
 ```
 
 ### Serviço `tagIntegrityService`
-Arquivo: `services/tagIntegrityService.ts`.
-Funções principais:
-```ts
-analyzeHeadlines(text)
-analyzeFootnotes(text)
-analyzeContent(text)
-recordIntegrity(summary)
-```
-São chamadas automaticamente em `App.tsx` após cada etapa para armazenar snapshots.
+Arquivo: `services/tagIntegrityService.ts` (auditorias locais e telemetria em localStorage). Chamado automaticamente em `App.tsx` após cada etapa para armazenar snapshots.
 
 ### Boas Práticas de Modelos OpenRouter
 - Prefira modelos com instrução clara (ex: Qwen Instruct, Llama Instruct) para tagging determinístico.
@@ -162,106 +154,25 @@ MIT. Veja `LICENSE`.
 
 Desde a revisão de setembro/2025, o fluxo OpenRouter pode operar em modo **clone total**:
 
-Características:
-- Mesmo MASTER PROMPT do Gemini (arquivo fonte único: `services/masterPrompt.ts`).
-- Temperatura fixa em `0.1` (sem variação por modo FAST/NORMAL para preservar estabilidade).
-- Sem pré-limpeza, enforcement, auditorias, sanitização ou heurísticas adicionais: primeira resposta é usada diretamente.
-- Risco reduzido de duplicações ou truncamentos induzidos por múltiplos passes.
+Características principais:
+- Mesmo MASTER PROMPT do Gemini (arquivo único `services/masterPrompt.ts`).
+- Temperatura fixa em 0.1 e primeira resposta usada diretamente (sem pré-limpeza/enforcement/sanitização).
+- Menor risco de duplicações ou divergências por passes adicionais.
 
 Arquivos relevantes:
-- `services/masterPrompt.ts` – construtor único do prompt.
-- `services/aiService.ts` – usa `buildMasterPrompt` para Gemini e OpenRouter (quando provider = openrouter).
-
-Removido neste modo (antes existiam e podem ser reintroduzidos se necessário):
-- Estratégias (`adapted`, `robust`).
-- Pré-limpeza LLM e local.
-- Enforcement de tags / reforço de footnotes.
-- Sanitização pós-modelo.
-- Auditorias de prefixos numéricos e snapshots de classificação.
-
-Reversão (caso queira restaurar camadas antigas):
-1. Recuperar histórico do commit anterior à simplificação.
-2. Repor funções removidas em `aiService.ts` (preclean, enforcement, sanitizer, etc.).
-3. Manter `masterPrompt.ts` para garantir alinhamento futuro e reduzir drift.
-
-Script de verificação manual de paridade de prompt:
-```
-node tests/promptParityCheck.ts  (se adicionar suporte a execução TS ou transpilar antes)
-```
-Saída esperada:
-```
-[PARITY OK] Prompts are identical in this sample. Length: ...
-```
-
-Motivação da mudança:
-> Simplificar e eliminar fontes secundárias de erro após constatação de que camadas de defesa estavam introduzindo duplicações e divergências de formatação que o prompt base do Gemini já evitava por design.
-
----
-
-
-Foi adicionada uma pipeline Python separada para revisão final de tags jurídicas (inspirada na descrição do revisor Gemini Fast). Ela pode operar isoladamente em textos já extraídos.
-
-### Instalação (opcional para modo Python)
-
-```
-pip install -r requirements.txt
-# PowerShell
-$Env:GEMINI_API_KEY="SUA_KEY"
-```
-
-### Uso Rápido
-
-```python
-from legal_tag_pipeline import quick_process
-
-texto = "Art 1 Texto sem formatação correta\n§ 1º Parágrafo isolado"
-resultado = quick_process(texto, api_key="SUA_KEY")
-
-print("Status:", resultado.validation_result.status)
-print("Erros:", resultado.review_result.error_count)
-print(resultado.final_content[:400])
-```
-
-### CLI
-
-```
-python -m legal_tag_pipeline.main entrada.txt -o saida.txt --api-key SUA_KEY
-python -m legal_tag_pipeline.main pasta_entrada -o pasta_saida --batch --pattern "*.txt"
-python -m legal_tag_pipeline.main doc.txt -o doc_corrigido.txt --strict
-```
-
-### Estrutura
-
-```
-legal_tag_pipeline/
-   models.py              # Dataclasses e enums
-   tag_reviewer.py        # Heurísticas de detecção
-   llm_client.py          # Gemini + fake
-   llm_corrector.py       # Correção focada
-   final_validator.py     # Score e status
-   gemini_fast_processor.py  # Orquestração
-   main.py                # CLI
-```
-
-### Notas
-- Sem GEMINI_API_KEY o comportamento é somente revisão heurística (sem correção automática).
-- Ajuste iterações: `--iterations 5` (default 3).
-- `--strict` impede aceitar status WARNING.
+- `services/masterPrompt.ts`
+- `services/aiService.ts`
 
 ### Extração com Docling (OpenRouter)
 
 Opcionalmente, quando o provedor ativo for OpenRouter, a extração inicial pode usar a biblioteca Docling via um microserviço Python local.
 
-1) Instale dependências Python (em venv recomendado):
+1) Instale dependências Python (apenas uma vez, de preferência via script): veja seção "Início Rápido (Windows)" abaixo para criar um venv externo e instalar.
 
-   - Arquivo `requirements.txt` já inclui:
-     - `docling`, `fastapi`, `uvicorn`
+2) Execute o serviço local (automático pelos scripts abaixo, ou manualmente se preferir):
 
-2) Execute o serviço local:
-
-   - Windows PowerShell:
-     - Ative seu ambiente (se aplicável) e rode:
-       `python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008 --reload`
+    - Windows PowerShell (manual):
+       `python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008`
 
 3) No app, com provedor OpenRouter selecionado:
 
@@ -270,13 +181,9 @@ Opcionalmente, quando o provedor ativo for OpenRouter, a extração inicial pode
 
 Para o provedor OpenRouter, Docling é obrigatório para a extração inicial; se o serviço não estiver disponível, o processamento não iniciará até o serviço ficar online.
 
-Para customizar o endpoint do serviço Docling, defina em localStorage: `docling_endpoint` (ex.: `http://localhost:8008`).
+Para customizar o endpoint do serviço Docling, defina em localStorage: `docling_endpoint` (ex.: `http://127.0.0.1:8008`).
 
-### Teste rápido
-
-```
-pytest -k smoke -q
-```
+Teste rápido: acesse `http://127.0.0.1:8008/health` e verifique `{ "status": "ok" }` com o serviço ligado.
 
 ---
 
@@ -286,22 +193,23 @@ Pré‑requisitos: Python 3.10+, Node.js 18+, PowerShell.
 
 1) Rodar tudo automaticamente (recomendado no Windows):
 
-   - Clique duas vezes em `scripts/start-all.bat`, ou rode no terminal:
+   - Duplo‑clique em `scripts/start-app.bat` ou rode:
 
    ```bat
-   scripts\start-all.bat
+   scripts\start-app.bat
    ```
 
-   Alternativa (via npm):
+   Alternativa via npm:
 
    ```bat
-   npm run start:all
+   npm run start:app
    ```
 
-   O script irá:
-   - Criar um venv externo em `C:\docling-venv` (caso não exista) e instalar dependências Python.
-   - Subir o serviço Docling em `http://127.0.0.1:8008` (detached) e criar logs em `scripts/logs`.
-   - Iniciar o Vite dev server e abrir o app em `http://localhost:5173/`.
+   O script único idempotente fará:
+   - Criar/ativar `.venv` local se necessário.
+   - Instalar dependências Python mínimas apenas se faltarem.
+   - Subir Docling (se não estiver rodando) e aguardar health (até 30s, curl ou PowerShell).
+   - Iniciar frontend Vite (se não estiver rodando) e abrir o navegador apenas nessa primeira inicialização.
 
 2) Verificar saúde do Docling:
 
@@ -325,7 +233,7 @@ Se preferir iniciar manualmente o serviço Docling (modo desenvolvedor):
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+\.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008
 ```
@@ -342,7 +250,7 @@ python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008
 
 Possíveis causas e como mitigar:
 
-- Janela/terminal encerrado: se a janela do Vite (npm run dev) for fechada, o servidor cai. Deixe a janela aberta ou rode o `start-all.bat` que cria janelas separadas.
+- Janela/terminal encerrado: se a janela do Vite (npm run dev) for fechada, o servidor cai. Deixe a janela aberta ou use novamente `scripts/start-app.bat` (idempotente) para reabrir.
 - Sleep/hibernação ou logoff: processos de usuário são finalizados ao sair da sessão; o sleep pode interromper redes/handles. Evite logoff, ajuste energia para não hibernar durante o uso ou use o watchdog abaixo.
 - Queda do Docling por exceção: verifique o último `scripts/logs/*.err.log`. Se houver crash esporádico, o watchdog reinicia automaticamente.
 - Porta em uso após retomada: se 8008 foi tomada por outro processo, pare e reinicie (`scripts/stop-docling.ps1` e depois `scripts/run-docling-detached.ps1`).
@@ -352,6 +260,139 @@ Watchdog (reinício automático do Docling):
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docling-watchdog.ps1 -VenvPath C:\docling-venv -IntervalSeconds 60
 ```
+
+---
+
+## 🤖 Modo Automático de Extração (Docling)
+
+O serviço Python agora aceita `mode=auto` em `/extract`.
+
+Heurística (rápida, sem carregar modelos pesados antes da decisão):
+- Lê até 5 primeiras páginas com `pypdf`.
+- Soma caracteres extraídos.
+- Conta imagens (/XObject Image).
+- Regras:
+   - Média de caracteres/página < 400 (default) → `advanced` (provável PDF escaneado ou denso em imagem)
+   - Número de imagens >= páginas analisadas → `advanced`
+   - Caso contrário → `simple`.
+   - Falha de leitura → fallback `simple`.
+
+Personalização: defina `DOCLING_AUTO_TEXT_THRESHOLD=300` (por exemplo) antes de iniciar o serviço para ajustar sensibilidade.
+
+Metadados retornados (`meta`):
+```
+requested_mode: 'auto'
+mode: 'simple' | 'advanced'
+fallback_used: bool
+fallback_reason: string | null
+auto_threshold_chars_per_page: "400" (se auto)
+```
+
+No frontend já usamos por padrão `mode=auto` (veja `services/doclingService.ts`).
+
+## ▶️ Script Único para Iniciar Tudo
+
+Use `scripts/start-app.bat` (Windows) para:
+1. Criar/ativar venv.
+2. Instalar dependências (somente se faltando).
+3. Subir Docling (se estiver parado) aguardando `/health`.
+4. Iniciar frontend (se parado).
+5. Abrir navegador (apenas na primeira vez dessa execução).
+
+### Script Único Idempotente (`scripts/start-app.bat`)
+Para um uso ainda mais simples há agora o script `scripts/start-app.bat` que:
+
+- Cria/ativa a venv se necessário.
+- Instala dependências mínimas se faltarem.
+- Só inicia o Docling se ele NÃO estiver rodando na porta configurada (default 8008).
+- Só inicia o frontend (Vite) se ele NÃO estiver na porta 5173.
+- Abre o navegador apenas quando inicia o frontend pela primeira vez.
+- Pode ser executado várias vezes sem gerar processos duplicados.
+
+Uso:
+1. Duplo‑clique em `scripts/start-app.bat`.
+2. Se já estava tudo rodando, você verá mensagens `[SKIP]` e nada quebra.
+3. Se a porta 8008 estiver ocupada por outro processo estranho, você receberá aviso e poderá parar o processo manualmente antes de reiniciar.
+
+Variáveis no topo do script (descomente para ajustar):
+```
+REM set DOCLING_LIGHT_MODE=1        (força modo simple / leve)
+REM set DOCLING_DISABLE_FALLBACK=1  (desativa fallback de memória)
+REM set DOCLING_AUTO_TEXT_THRESHOLD=500  (altera heurística do modo auto)
+```
+
+Se quiser integrar watchdog automático, pode acrescentar depois do bloco Docling:
+```
+start "DoclingWatch" powershell -ExecutionPolicy Bypass -NoProfile -File scripts\docling-watchdog.ps1 -IntervalSeconds 20 -VenvPath .\.venv
+```
+
+---
+
+### Fluxo para o Usuário Final
+1. Baixar/clonar o projeto.
+2. Duplo‑clique em `scripts/start-app.bat`.
+3. Navegador abre em `http://localhost:5173`.
+4. Fazer upload de qualquer PDF (texto legível ou escaneado).
+5. O sistema escolhe automaticamente o modo de extração (simple vs advanced) sem ação manual.
+
+### Como a Decisão Acontece (Resumo Simples)
+- Lê rapidamente algumas páginas do PDF.
+- Se quase não tem texto ou tem muitas imagens → ativa OCR (advanced).
+- Se já tem texto estruturado → usa modo rápido (simple).
+- Se memória falta em advanced → tenta fallback para simple.
+
+### Ajustes Opcionais
+| Desejo | O que fazer |
+|--------|-------------|
+| Forçar sempre modo leve | Definir `set DOCLING_LIGHT_MODE=1` no `.bat` |
+| Desativar retry por memória | `set DOCLING_DISABLE_FALLBACK=1` |
+| Ajustar sensibilidade do auto | `set DOCLING_AUTO_TEXT_THRESHOLD=300` (ou outro) |
+
+### Ver Metadados da Última Extração
+Abra o console do navegador (F12) e rode:
+```js
+JSON.parse(localStorage.getItem('last_docling_meta')||'null')
+```
+
+### Chamada via curl (exemplo)
+```bash
+curl -F "file=@meu.pdf" "http://127.0.0.1:8008/extract?mode=auto" -o resultado.json
+```
+
+### Erros Comuns
+| Sintoma | Causa provável | Ação |
+|---------|----------------|------|
+| Offline no frontend | Docling ainda iniciando | Aguarde ou clique Detectar |
+| Fallback usado | Falta de memória no advanced | Aumente paginação virtual ou aceite simple |
+| Porta ocupada | Outro processo na 8008 | Feche processo ou mude `DOCLING_PORT` no `.bat` |
+
+---
+*Se quiser empacotar isso em um instalador ou adicionar logs mais detalhados, abra uma issue.*
+
+Variáveis opcionais (descomente no topo do .bat):
+```
+set DOCLING_LIGHT_MODE=1        # força sempre simple, ignorando OCR
+set DOCLING_DISABLE_FALLBACK=1  # desativa retry de memória
+set DOCLING_AUTO_TEXT_THRESHOLD=500  # ajusta decisão do modo auto
+```
+
+## 🧪 Exemplos de Uso via curl
+
+```bash
+curl -F "file=@relatorio.pdf" "http://127.0.0.1:8008/extract?mode=auto" > saida.json
+```
+
+Modo fixo:
+```bash
+curl -F "file=@relatorio.pdf" "http://127.0.0.1:8008/extract?mode=advanced" > saida.json
+```
+
+## 📦 Próximos (Sugestões)
+- Script `extract-one.bat` chamando cliente CLI Python (auto por default)
+- Exibir badge na UI quando `auto` decidir por `advanced` ou usar fallback de memória
+- Adicionar variável `DOCLING_AUTO_MAX_PAGES` para limitar páginas analisadas.
+
+---
 
 O watchdog verifica periodicamente `http://127.0.0.1:8008/health` e, se falhar, roda novamente `run-docling-detached.ps1`.
 

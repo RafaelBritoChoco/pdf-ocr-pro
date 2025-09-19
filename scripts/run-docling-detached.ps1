@@ -48,6 +48,17 @@ if (Test-Path $pidFile) {
   } catch {}
 }
 
+# Abort early if port is already listening (avoid duplicate uvicorn instances)
+$portBusy = $false
+try {
+  $conn = Test-NetConnection -ComputerName $BindHost -Port $BindPort -InformationLevel Quiet
+  if ($conn) { $portBusy = $true }
+} catch {}
+if ($portBusy) {
+  Write-Warning "Port $BindPort already in use on $BindHost. Skipping new Docling start."
+  exit 0
+}
+
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { throw 'Python not found in PATH (ensure venv activation succeeded)' }
 Write-Host "Using Python: $python" -ForegroundColor DarkCyan

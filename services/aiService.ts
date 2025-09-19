@@ -4,6 +4,9 @@
 import { ProcessingMode } from '../types';
 import { performOcrOnPdf as geminiOcr, processDocumentChunk as geminiProcess, setGeminiApiKey } from './geminiService';
 import { callOpenRouter } from './openRouterService';
+import { processFootnotesChunkOpenRouter } from './openrouterFootnote';
+import { processHeadlinesChunkOpenRouter } from './openrouterHeadline';
+import { processTextLevelChunkOpenRouter } from './openrouterTextLevel';
 import { buildMasterPrompt } from './masterPrompt';
 import { cleanText, isCleanupOnlyMode } from './textCleanup';
 import { auditInlineNumericRefs } from './footnoteAudit';
@@ -44,6 +47,53 @@ export interface ProcessChunkArgs {
   provider: Provider;
   openRouterModel?: string; // optional override when using openrouter (Qwen, Llama 3, etc.)
   expectedSessionId?: string; // nova checagem de consistência de sessão
+}
+
+// Stage-specific simplified APIs to keep code clean for OpenRouter
+export async function processFootnotesChunk(args: Omit<ProcessChunkArgs, 'provider' | 'task_instructions'> & { provider: Provider; openRouterModel?: string }): Promise<string> {
+  if (args.provider === 'gemini') {
+    // For parity, we reuse the unified path: Gemini uses master prompt internally
+    return processDocumentChunkUnified({ ...args, provider: 'gemini', task_instructions: 'Footnote tagging pass' });
+  }
+  return processFootnotesChunkOpenRouter({
+    main_chunk_content: args.main_chunk_content,
+    continuous_context_summary: args.continuous_context_summary,
+    previous_chunk_overlap: args.previous_chunk_overlap,
+    next_chunk_overlap: args.next_chunk_overlap,
+    onApiCall: args.onApiCall,
+    mode: args.mode,
+    model: args.openRouterModel
+  });
+}
+
+export async function processHeadlinesChunk(args: Omit<ProcessChunkArgs, 'provider' | 'task_instructions'> & { provider: Provider; openRouterModel?: string }): Promise<string> {
+  if (args.provider === 'gemini') {
+    return processDocumentChunkUnified({ ...args, provider: 'gemini', task_instructions: 'Headline tagging pass' });
+  }
+  return processHeadlinesChunkOpenRouter({
+    main_chunk_content: args.main_chunk_content,
+    continuous_context_summary: args.continuous_context_summary,
+    previous_chunk_overlap: args.previous_chunk_overlap,
+    next_chunk_overlap: args.next_chunk_overlap,
+    onApiCall: args.onApiCall,
+    mode: args.mode,
+    model: args.openRouterModel
+  });
+}
+
+export async function processTextLevelChunk(args: Omit<ProcessChunkArgs, 'provider' | 'task_instructions'> & { provider: Provider; openRouterModel?: string }): Promise<string> {
+  if (args.provider === 'gemini') {
+    return processDocumentChunkUnified({ ...args, provider: 'gemini', task_instructions: 'Text-level tagging pass' });
+  }
+  return processTextLevelChunkOpenRouter({
+    main_chunk_content: args.main_chunk_content,
+    continuous_context_summary: args.continuous_context_summary,
+    previous_chunk_overlap: args.previous_chunk_overlap,
+    next_chunk_overlap: args.next_chunk_overlap,
+    onApiCall: args.onApiCall,
+    mode: args.mode,
+    model: args.openRouterModel
+  });
 }
 
 // Pré-limpeza específica para OpenRouter (Qwen) em texto completo antes do chunking.

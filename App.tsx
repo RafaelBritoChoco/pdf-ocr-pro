@@ -35,12 +35,15 @@ import { FileUpload } from './components/FileUpload';
 import { ProcessingIndicator } from './components/ProcessingIndicator';
 import { ResultViewer } from './components/ResultViewer';
 import { PerformanceTracker } from './components/PerformanceTracker';
+import { ExtractionBanner } from './components/ExtractionBanner';
 import { ConfigurationScreen } from './components/ConfigurationScreen';
 import { usePerformanceTracker } from './hooks/usePerformanceTracker';
 import { ProcessingState, DownloadFormat, ProcessingMode } from './types';
 import { analyzeHeadlines, analyzeFootnotes, analyzeContent, recordIntegrity } from './services/tagIntegrityService';
 import { extractTextFromFile, getPdfPageCount } from './services/pdfExtractor';
-import { extractWithDocling, doclingHealth } from './services/doclingService';
+import { extractWithDoclingFull, doclingHealth, waitForDoclingHealthy } from './services/doclingService';
+import { DoclingMeta } from './types';
+import DoclingMetaPanel from './components/DoclingMetaPanel';
 import { createChunksByCount } from './services/chunkingService';
 import { 
   getTaskInstructionsForCleaning,
@@ -49,6 +52,7 @@ import {
   getTaskInstructionsForFootnotes,
   getTaskInstructionsForFootnotesMarkers,
 } from './services/geminiService';
+import { useDoclingEndpoint } from './services/doclingDetect';
 import { processDocumentChunkUnified, performOcrUnified, configureProviderApiKey, Provider, initialNormalizeWithOpenRouter } from './services/aiService';
 import { validateOpenRouterKey, abortAllOpenRouterRequests } from './services/openRouterService';
 import { ApiKeyScreen } from './components/ApiKeyScreen';
@@ -133,12 +137,15 @@ export default function App() {
   const [selectedFileName, setSelectedFileName] = useState<string | null>(() => localStorage.getItem('last_file_name') || null);
   const [initialExtractedText, setInitialExtractedText] = useState<string>('');
   const [extractedText, setExtractedText] = useState<string>('');
+  const [extractorSource, setExtractorSource] = useState<'docling' | 'pdfjs' | null>(null);
   const [textWithHeadlines, setTextWithHeadlines] = useState<string | null>(null);
   const [structuredText, setStructuredText] = useState<string | null>(null);
   const [markerStageText, setMarkerStageText] = useState<string | null>(null); // snapshot após footnotes markers
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [doclingConnectMessage, setDoclingConnectMessage] = useState<string>('');
   const [progress, setProgress] = useState<number>(0);
   const [structuringMessage, setStructuringMessage] = useState<string>('');
+  const [doclingMeta, setDoclingMeta] = useState<DoclingMeta | null>(null);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [desiredChunkCount, setDesiredChunkCount] = useState<number>(1);
   const [failedChunks, setFailedChunks] = useState<number[]>([]);
@@ -184,34 +191,12 @@ export default function App() {
   // Evitar múltiplas extrações paralelas causando estados inconsistentes
   const extractingRef = useRef(false);
   // Controle de cancelamento global para loops longos (cleaning, headlines, footnotes, content)
-  const cancelTokenRef = useRef<{id:number; cancelled:boolean}>({ id: 0, cancelled: false });
-  // Status do Docling (para provider openrouter)
-  const [doclingOnline, setDoclingOnline] = useState<boolean | null>(null);
-  const [doclingLatencyMs, setDoclingLatencyMs] = useState<number | null>(null);
-  const [doclingLastCheck, setDoclingLastCheck] = useState<number | null>(null);
-  const getDoclingEndpoint = useCallback(() => {
-    try {
-      const ls = localStorage.getItem('docling_endpoint');
-      if (ls && ls.trim()) return ls.trim().replace(/\/$/, '');
-    } catch {}
-    return 'http://127.0.0.1:8008';
-  }, []);
-  const checkDocling = useCallback(async () => {
-    try {
-      setDoclingOnline(null); // indicando checagem
-      const ep = getDoclingEndpoint();
-      const t0 = performance.now();
-      const ok = await doclingHealth(ep);
-      const t1 = performance.now();
-      setDoclingOnline(!!ok);
-      setDoclingLatencyMs(ok ? Math.round(t1 - t0) : null);
-      setDoclingLastCheck(Date.now());
-    } catch {
-      setDoclingOnline(false);
-      setDoclingLatencyMs(null);
-      setDoclingLastCheck(Date.now());
-    }
-  }, [getDoclingEndpoint]);
+  // Auto-detecção do endpoint Docling (substitui lógica manual anterior)
+  // Modo lazy: só detecta quando realmente precisamos (ex: iniciar extração que usa Docling)
+  const { endpoint: autoDoclingEndpoint, status: doclingStatus, latencyMs: doclingLatencyMs, lastCheck: doclingLastCheck, retry: retryDoclingDetect, start: startDoclingDetect, started: doclingDetectStarted } = useDoclingEndpoint({ auto: false });
+  const doclingOnline = doclingStatus === 'online' ? true : (doclingStatus === 'offline' ? false : null);
+  const getDoclingEndpoint = useCallback(() => autoDoclingEndpoint || 'http://localhost:8008', [autoDoclingEndpoint]);
+  const checkDocling = useCallback(() => retryDoclingDetect(), [retryDoclingDetect]);
 
   // Tipagem auxiliar para objeto de retomada
   interface CleaningResumeData {
@@ -226,7 +211,7 @@ export default function App() {
     provider: Provider;
     processingMode: ProcessingMode;
     preCleanEnabled: boolean;
-  openRouterModel?: string;
+    openRouterModel?: string;
   }
 
   const saveCleaningResume = useCallback((data: CleaningResumeData) => {
@@ -281,6 +266,9 @@ export default function App() {
     try { localStorage.setItem('active_session_id', String(Date.now())); } catch {}
   }, [resetTimer]);
 
+  // Referência global de cancelamento (definida após handleReset para clareza)
+  const cancelTokenRef = useRef<{id:number; cancelled:boolean}>({ id: Date.now(), cancelled: false });
+
   // Gera/renova session id quando o App monta (evita reuso após F5 de loops antigos)
   useEffect(() => {
     try { localStorage.setItem('active_session_id', String(Date.now())); } catch {}
@@ -293,12 +281,16 @@ export default function App() {
     }
   }, [apiKey, provider]);
 
-  // Checar Docling quando provider for openrouter e estamos na tela inicial
+  // Checar Docling automaticamente quando a aplicação carrega
   useEffect(() => {
-    if (provider === 'openrouter' && processingState === ProcessingState.IDLE) {
-      checkDocling();
+    if (processingState === ProcessingState.IDLE) {
+      if (!doclingDetectStarted) {
+        startDoclingDetect();
+      } else {
+        checkDocling();
+      }
     }
-  }, [provider, processingState, checkDocling]);
+  }, [processingState, checkDocling, doclingDetectStarted, startDoclingDetect]);
 
   const handleApiKeySave = useCallback((data: { provider: string; geminiKey: string; openRouterKey: string; openRouterModel: string; }) => {
     const prov = (data.provider as Provider) || 'gemini';
@@ -439,31 +431,111 @@ export default function App() {
       let rawText = '';
       // Nova regra: para OpenRouter, Docling é obrigatório. Sem fallback para pdf.js.
       if (provider === 'openrouter') {
-        const healthy = await doclingHealth();
+        // Garante que a detecção foi iniciada (lazy start)
+        if (!doclingDetectStarted) {
+          await startDoclingDetect();
+        } else {
+          // Revalida rapidamente se já iniciou
+          await retryDoclingDetect();
+        }
+        setDoclingConnectMessage('Verificando serviço Docling...');
+        const healthy = await waitForDoclingHealthy({
+          timeoutMs: 30000,
+          onAttempt: ({ attempt, ok, elapsedMs, nextDelayMs }) => {
+            if (ok) {
+              setDoclingConnectMessage('Docling online (' + Math.round(elapsedMs) + ' ms). Iniciando extração...');
+            } else {
+              setDoclingConnectMessage(`Aguardando Docling ficar online (tentativa ${attempt})...`);
+            }
+          }
+        });
+        let shouldCallDocling = healthy;
         if (!healthy) {
           const ep = getDoclingEndpoint();
-          setErrorMessage(`Docling indisponível no endpoint ${ep}. Inicie o serviço local de extração (FastAPI) e tente novamente.\nDica: python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008 --reload\nSe estiver usando outra porta/host, ajuste em: Tela de Chaves → Endpoint Docling.`);
-          setProcessingState(ProcessingState.ERROR);
-          return;
+          const allowFallback = (() => { try { const f = localStorage.getItem('allow_docling_offline_fallback'); return f == null || f === '1'; } catch { return true; } })();
+          if (allowFallback) {
+            setDoclingConnectMessage(`Docling offline em ${ep}. Usando extração local temporária (pdf.js) enquanto o serviço reinicia...`);
+            rawText = await extractTextFromFile(file, setProgress);
+            setExtractorSource('pdfjs');
+            shouldCallDocling = false; // pular tentativa Docling
+          } else {
+            setErrorMessage(`Docling indisponível no endpoint ${ep}. Inicie o serviço local de extração (FastAPI) e tente novamente.\nDica: python -m uvicorn docling_service:app --host 127.0.0.1 --port 8008 --reload\nSe estiver usando outra porta/host, ajuste em: Tela de Chaves → Endpoint Docling.`);
+            setDoclingConnectMessage('');
+            setProcessingState(ProcessingState.ERROR);
+            return;
+          }
         }
-        try {
-          const controller = new AbortController();
-          const mode = processingMode === ProcessingMode.FAST ? 'simple' : 'advanced';
-          rawText = await extractWithDocling(file, {
-            mode,
-            signal: controller.signal,
-            onProgress: setProgress,
-          });
-        } catch (e: any) {
-          const ep = getDoclingEndpoint();
-          const msg = (e?.message || String(e));
-          setErrorMessage(`Falha na extração com Docling (endpoint ${ep}): ${msg}.\nAguarde alguns segundos e tente novamente, ou verifique se o serviço está ativo e o endpoint está correto (Tela de Chaves).`);
-          setProcessingState(ProcessingState.ERROR);
-          return;
+        if (shouldCallDocling) {
+          try {
+            const controller = new AbortController();
+            const mode = processingMode === ProcessingMode.FAST ? 'simple' : 'advanced';
+            let selectedMode: 'simple' | 'advanced' = mode === 'advanced' ? 'advanced' : 'simple';
+            try {
+              const full = await extractWithDoclingFull(file, {
+                mode: selectedMode,
+                signal: controller.signal,
+                onProgress: setProgress,
+              });
+              rawText = full.text;
+              setDoclingMeta(full.meta || null);
+              setExtractorSource('docling');
+            } catch (err: any) {
+              const msg = String(err?.message || err);
+              if (selectedMode === 'advanced' && /memory|not enough/i.test(msg)) {
+                // fallback para simple
+                setDoclingConnectMessage('Memória insuficiente no modo advanced. Tentando novamente em modo simple...');
+                selectedMode = 'simple';
+                try {
+                  const full2 = await extractWithDoclingFull(file, {
+                    mode: 'simple',
+                    signal: controller.signal,
+                    onProgress: setProgress,
+                  });
+                  rawText = full2.text;
+                  setDoclingMeta(full2.meta || null);
+                  setExtractorSource('docling');
+                } catch (err2: any) {
+                  throw err2; // propaga segunda falha
+                }
+              } else if (/Network error calling Docling service/i.test(msg)) {
+                // Rede caiu no meio da extração: fallback local para não abortar fluxo
+                setDoclingConnectMessage('Docling perdeu conexão durante a extração. Usando extração local temporária (pdf.js)...');
+                rawText = await extractTextFromFile(file, setProgress);
+                setExtractorSource('pdfjs');
+              } else {
+                throw err; // propaga erro original
+              }
+            }
+            setDoclingConnectMessage('');
+          } catch (e: any) {
+            const ep = getDoclingEndpoint();
+            const msg = (e?.message || String(e));
+            // Último recurso: fallback local (pdf.js) para não bloquear o usuário
+            const allowFallback = (() => { try { const f = localStorage.getItem('allow_docling_offline_fallback'); return f == null || f === '1'; } catch { return true; } })();
+            if (allowFallback) {
+              console.warn('[Docling][Fallback] Extração falhou:', msg, '→ usando pdf.js');
+              setDoclingConnectMessage(`Falha com Docling em ${ep}. Usando extração local temporária (pdf.js).`);
+              try {
+                rawText = await extractTextFromFile(file, setProgress);
+                setExtractorSource('pdfjs');
+              } catch (localErr) {
+                setErrorMessage(`Falha na extração local após erro Docling: ${String(localErr)}`);
+                setDoclingConnectMessage('');
+                setProcessingState(ProcessingState.ERROR);
+                return;
+              }
+            } else {
+              setErrorMessage(`Falha na extração com Docling (endpoint ${ep}): ${msg}.\nAguarde alguns segundos e tente novamente, ou verifique se o serviço está ativo e o endpoint está correto (Tela de Chaves).`);
+              setDoclingConnectMessage('');
+              setProcessingState(ProcessingState.ERROR);
+              return;
+            }
+          }
         }
       } else {
         // Provider Gemini mantém extração local via pdf.js
         rawText = await extractTextFromFile(file, setProgress);
+        setExtractorSource('pdfjs');
       }
       
       let ocrText = '';
@@ -486,7 +558,9 @@ export default function App() {
       }
       
   const combinedText = (rawText.trim() + '\n\n' + ocrText.trim()).trim();
-      setInitialExtractedText(combinedText);
+  setInitialExtractedText(combinedText);
+  // Atualiza meta armazenada (garante reload após extração manual)
+  try { const stored = localStorage.getItem('last_docling_meta'); if (stored && !doclingMeta) setDoclingMeta(JSON.parse(stored)); } catch {}
       
       const recommendedCount = Math.max(1, Math.ceil(combinedText.length / BASE_CHUNK_SIZE_FOR_RECOMMENDATION));
       setDesiredChunkCount(recommendedCount);
@@ -1130,6 +1204,9 @@ export default function App() {
                       className="px-3 py-1.5 text-xs rounded-md bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600"
                     >Abrir /health</a>
                     <button onClick={checkDocling} className="px-3 py-1.5 text-xs rounded-md bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">Verificar</button>
+                    {doclingOnline===false && (
+                      <button onClick={checkDocling} className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500">Detectar</button>
+                    )}
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-gray-400 break-all">
@@ -1170,6 +1247,12 @@ export default function App() {
                     <div>
                       <p className="font-medium text-sm text-gray-200">Pré-limpeza global</p>
                       <p className="text-xs text-gray-400 max-w-sm">Executa uma passagem única no texto completo para remover ruído repetitivo antes do chunking.</p>
+              {/* Painel de meta Docling */}
+              {(provider === 'openrouter' || doclingMeta || doclingConnectMessage) && (
+                <div className="w-full max-w-4xl mb-6">
+                  <DoclingMetaPanel meta={doclingMeta} connectMessage={doclingConnectMessage} />
+                </div>
+              )}
                     </div>
                     <button
                       type="button"
@@ -1316,6 +1399,7 @@ export default function App() {
 
   return (
     <>
+      <ExtractionBanner source={extractorSource} className="fixed top-0 left-0 right-0 z-50" />
       {showResumePrompt && resumeCandidate && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="w-full max-w-md mx-4 p-6 bg-gray-800/95 rounded-lg shadow-2xl border border-gray-700 space-y-5 animate-fade-in">
@@ -1335,7 +1419,8 @@ export default function App() {
           </div>
         </div>
       )}
-      <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 font-sans">
+      <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 font-sans"
+        style={{ paddingTop: extractorSource ? '3rem' : undefined }}>
         <PerformanceTracker 
             elapsedTime={elapsedTime} 
             apiCalls={apiCalls}
